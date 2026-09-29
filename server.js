@@ -6,7 +6,7 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 const PORT = Number(process.env.PORT) || 3000;
-const VERSION = '3.0.3-beta-final-hotfix';
+const VERSION = '3.0.4-public-online-hotfix';
 const REJOIN_MS = Math.max(1000, Number(process.env.REJOIN_MS) || 30_000);
 const rooms = new Map();
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -31,7 +31,9 @@ const io = new Server(server, {
     },
     methods: ['GET', 'POST']
   },
-  maxHttpBufferSize: 5e6
+  maxHttpBufferSize: 5e6,
+  perMessageDeflate: { threshold: 1024 },
+  httpCompression: true
 });
 
 app.get('/', (_req, res) => res.json({
@@ -366,6 +368,12 @@ io.on('connection', socket => {
     const payload = roomPayload(room);
     io.to(room.code).emit('game:start', payload);
     emitRoom(room);
+    // Solicita um estado completo assim que todos os clientes terminaram o bootstrap.
+    setTimeout(() => {
+      const live = rooms.get(room.code);
+      const h = live && hostPlayer(live);
+      if (h?.connected && h.socketId) io.to(h.socketId).emit('game:snapshot-request-host', { reason: 'room-start' });
+    }, 180);
     cb({ ok: true });
   });
 
@@ -387,10 +395,39 @@ io.on('connection', socket => {
   socket.on('game:snapshot', payload => {
     const room = findRoomOf(socket);
     if (!room?.started || !isHostSocket(room, socket) || !payload) return;
-    room.lastSnapshot = payload;
-    room.lastSnapshotAt = Date.now();
-    rememberStates(room, payload);
-    socket.to(room.code).emit('game:snapshot', payload);
+    const isFull = payload?._net?.full !== false || !room.lastSnapshot;
+    // Guarda apenas snapshots completos para reconexão/host migration. Lite é descartável.
+    if (isFull) {
+      room.lastSnapshot = payload;
+      room.lastSnapshotAt = Date.now();
+      rememberStates(room, payload);
+      socket.to(room.code).emit('game:snapshot', payload);
+    } else {
+      // Snapshots de combate são voláteis: se a conexão estiver ocupada, descarta o frame velho
+      // em vez de formar uma fila que deixa o convidado segundos atrás do host.
+      socket.to(room.code).volatile.emit('game:snapshot', payload);
+    }
+  });
+
+  socket.on('game:snapshot-request', payload => {
+    const room = findRoomOf(socket);
+    if (!room?.started || isHostSocket(room, socket)) return;
+    const p = playerBySocket(room, socket.id);
+    const h = hostPlayer(room);
+    if (!p || !h?.connected || !h.socketId) return;
+    if (room.lastSnapshot) {
+      const replay = {
+        ...room.lastSnapshot,
+        _net: { ...(room.lastSnapshot._net || {}), replay: true, replayAt: Date.now() }
+      };
+      socket.emit('game:snapshot', replay);
+    }
+    io.to(h.socketId).emit('game:snapshot-request-host', {
+      slot: p.slot,
+      playerId: p.playerId,
+      lastSeq: Number(payload?.lastSeq) || 0,
+      reason: cleanText(payload?.reason, 'watchdog', 24)
+    });
   });
 
   socket.on('game:action', payload => {
