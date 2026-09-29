@@ -1,0 +1,49 @@
+name: Multiplayer V4 validation
+
+on:
+  push:
+    branches:
+      - multiplayer-v4-authoritative
+  workflow_dispatch:
+
+jobs:
+  validate-v4:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install clean dependencies
+        run: npm ci
+
+      - name: Syntax checks
+        run: npm run check
+
+      - name: Authoritative simulation tests
+        run: npm test
+
+      - name: Boot server and verify health
+        shell: bash
+        run: |
+          PORT=3456 FRONTEND_ORIGINS=https://pandapidio.github.io node server.js > /tmp/rdm-v4.log 2>&1 &
+          PID=$!
+          trap 'kill $PID || true; cat /tmp/rdm-v4.log' EXIT
+          for i in {1..20}; do
+            if curl -fsS http://127.0.0.1:3456/health > /tmp/health.json; then
+              break
+            fi
+            sleep 0.25
+          done
+          cat /tmp/health.json
+          node -e "const h=require('/tmp/health.json'); if(!h.ok||h.protocol!=='rdm-v4'||h.authoritative!==true||h.simulationHz!==60||h.snapshotHz!==20) process.exit(1);"
+          kill $PID
+          wait $PID || true
+          trap - EXIT
+          cat /tmp/rdm-v4.log
