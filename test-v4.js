@@ -47,10 +47,15 @@ assert(snap.shots.every(s=>s.team==='player'),'snapshot não pode transformar ti
 sim.wave=14;sim.enemies=[];sim.waveRemainingToSpawn=0;sim.nextWave();
 assert.equal(sim.wave,15);
 assert(sim.bossFight&&sim.enemies.some(e=>e.isBoss),'onda 15 deve nascer no servidor');
+const boss=sim.enemies.find(e=>e.isBoss);boss.hp=1;
+sim.shots.push({__netId:'test-boss-shot',team:'player',ownerId:0,x:boss.x,y:boss.y,prevX:boss.x,prevY:boss.y,vx:0,vy:0,life:1,damage:2,radius:8});
+sim.resolveCollisions();run(sim,2.5);
+assert.equal(sim.wave,16,'partida deve avançar após chefe morrer');
+assert(JSON.stringify(sim.snapshot(false)).length<25000,'snapshot deve permanecer compacto');
 
 console.log(JSON.stringify({
   ok:true,
-  tests:16,
+  tests:18,
   ticks:sim.metrics.ticks,
   wave:sim.wave,
   players:sim.players.map(p=>({id:p.id,connected:p.connected,hp:p.entity.hp})),
