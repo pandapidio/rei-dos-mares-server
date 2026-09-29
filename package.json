@@ -1,0 +1,18 @@
+{
+  "name": "rei-dos-mares-multiplayer-server",
+  "version": "3.0.3-beta-final-hotfix",
+  "private": true,
+  "description": "Servidor público Socket.IO do Rei dos Mares",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "express": "^5.2.1",
+    "socket.io": "^4.8.4"
+  }
+}
