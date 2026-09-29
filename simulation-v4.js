@@ -42,7 +42,7 @@ class AuthoritativeSimulation {
     this.wave=1; this.score=0; this.elapsed=0; this.waveTimer=0; this.waveSpawnClock=.65;
     this.waveRemainingToSpawn=3; this.waveTotal=3; this.waveCompleteTimer=-1;
     this.players=playerMetas.map((m,i)=>makePlayer(m,i,playerMetas.length));
-    this.enemies=[]; this.shots=[]; this.enemyShots=[]; this.chests=[]; this.bossFight=null;
+    this.enemies=[]; this.shots=[]; this.enemyShots=[]; this.chests=[]; this.bossFight=null; this.bossClearTimer=-1;
     this.paused=false; this.acc=0; this.rng=opts.random||Math.random; this.lastEvent=null;
     this.metrics={ticks:0,shots:0,enemyShots:0,corrections:0};
   }
@@ -167,11 +167,16 @@ class AuthoritativeSimulation {
   }
   destroyEnemy(e,owner){
     e.destroyed=true;this.score+=e.isBoss?1200:100;if(owner){owner.stats.kills++;owner.gold+=e.isBoss?220:35;owner.stats.goldCollected+=e.isBoss?220:35;}
-    if(e.isBoss&&this.bossFight){this.bossFight.defeated=true;this.bossFight.intro=0;}
+    if(e.isBoss&&this.bossFight){this.bossFight.defeated=true;this.bossFight.intro=0;this.bossClearTimer=2.2;}
   }
   updateWaves(dt){
-    if(this.state!=='play'||this.bossFight?.defeated)return;
+    if(this.state!=='play')return;
     if(this.bossFight){
+      if(this.bossFight.defeated){
+        this.bossClearTimer-=dt;
+        if(this.bossClearTimer<=0){this.bossClearTimer=-1;this.bossFight=null;this.nextWave();}
+        return;
+      }
       if(!this.enemies.length){this.bossFight=null;this.nextWave();}return;
     }
     if(this.waveRemainingToSpawn>0){
@@ -182,7 +187,7 @@ class AuthoritativeSimulation {
     }
   }
   nextWave(){
-    this.wave++;this.waveTimer=0;this.waveCompleteTimer=-1;this.bossFight=null;
+    this.wave++;this.waveTimer=0;this.waveCompleteTimer=-1;this.bossFight=null;this.bossClearTimer=-1;
     if(this.wave===15){this.waveRemainingToSpawn=0;this.waveTotal=1;this.startBoss();return;}
     const count=Math.min(18,3+Math.floor(this.wave*1.45));
     this.waveRemainingToSpawn=count;this.waveTotal=count;this.waveSpawnClock=.8;
