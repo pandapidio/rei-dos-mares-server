@@ -6,7 +6,7 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 const PORT = Number(process.env.PORT) || 3000;
-const VERSION = '3.0.4-public-online-hotfix';
+const VERSION = '3.1.0-network-stability';
 const REJOIN_MS = Math.max(1000, Number(process.env.REJOIN_MS) || 30_000);
 const rooms = new Map();
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -98,6 +98,7 @@ function roomPayload(room) {
     code: room.code,
     hostId: hp?.socketId || null,
     hostPlayerId: hp?.playerId || null,
+    hostEpoch: Math.max(1, Number(room.hostEpoch)||1),
     started: room.started,
     paused: room.paused,
     maxPlayers: 3,
@@ -138,7 +139,9 @@ function attachSocket(socket, room, p) {
 function promoteHost(room, preferred = null) {
   const candidates = connectedPlayers(room);
   const next = preferred && preferred.connected ? preferred : candidates[0] || null;
+  const previous = room.hostToken || null;
   room.hostToken = next?.token || null;
+  if (previous !== room.hostToken) room.hostEpoch = Math.max(1, Number(room.hostEpoch)||1) + 1;
   return next;
 }
 function notifyHostMigration(room, departedSlot = null, reason = 'host-migration') {
@@ -150,6 +153,7 @@ function notifyHostMigration(room, departedSlot = null, reason = 'host-migration
     slot: nextHost.slot,
     departedSlot,
     lastSnapshot: room.lastSnapshot || null,
+    hostEpoch: Math.max(1, Number(room.hostEpoch)||1),
     reason
   });
   io.to(room.code).emit('game:pause-state', { paused: false, by: nextHost.slot, reason: 'host-migration' });
@@ -300,6 +304,7 @@ io.on('connection', socket => {
       const room = {
         code,
         hostToken: token,
+        hostEpoch: 1,
         players: new Map([[token, p]]),
         started: false,
         paused: false,
@@ -395,6 +400,8 @@ io.on('connection', socket => {
   socket.on('game:snapshot', payload => {
     const room = findRoomOf(socket);
     if (!room?.started || !isHostSocket(room, socket) || !payload) return;
+    const epoch = Math.max(1, Number(room.hostEpoch)||1);
+    payload._net = { ...(payload._net || {}), hostEpoch: epoch };
     const isFull = payload?._net?.full !== false || !room.lastSnapshot;
     // Guarda apenas snapshots completos para reconexão/host migration. Lite é descartável.
     if (isFull) {
