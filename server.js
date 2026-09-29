@@ -247,7 +247,19 @@ function resumeIntoRoom(socket, payload, cb = () => {}) {
   if (!room || !room.started) return cb({ ok: false, error: 'Esta viagem não está mais disponível.' });
   const p = playerByToken(room, token);
   if (!p) return cb({ ok: false, error: 'Sessão de retorno inválida.' });
-  if (p.connected) return cb({ ok: false, error: 'Este capitão já está conectado.' });
+  if (p.connected) {
+    // Se o próprio navegador ainda mantém o mesmo socket, "retomar" é idempotente:
+    // devolvemos o estado atual em vez de bloquear com "já conectado".
+    if (p.socketId === socket.id) {
+      const ps = p.lastPlayerState || extractPlayerState(room, p.slot) || null;
+      return cb({
+        ok:true, room:roomPayload(room), yourSlot:p.slot, playerId:p.playerId, resumeToken:p.token,
+        lastSnapshot:room.lastSnapshot||null, playerState:ps, becameHost:p.token===room.hostToken,
+        hostEpoch:Math.max(1,Number(room.hostEpoch)||1), alreadyConnected:true
+      });
+    }
+    return cb({ ok: false, error: 'Este capitão já está conectado em outra aba ou dispositivo.' });
+  }
   if (p.expired || !p.reconnectUntil || Date.now() > p.reconnectUntil) {
     p.expired = true; p.reconnectUntil = 0;
     return cb({ ok: false, error: 'O tempo de retorno desta viagem terminou.' });
