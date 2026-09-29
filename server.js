@@ -153,6 +153,7 @@ function notifyHostMigration(room, departedSlot = null, reason = 'host-migration
     slot: nextHost.slot,
     departedSlot,
     lastSnapshot: room.lastSnapshot || null,
+    latestSnapshot: room.lastLiteSnapshot || room.lastSnapshot || null,
     hostEpoch: Math.max(1, Number(room.hostEpoch)||1),
     reason
   });
@@ -254,7 +255,8 @@ function resumeIntoRoom(socket, payload, cb = () => {}) {
       const ps = p.lastPlayerState || extractPlayerState(room, p.slot) || null;
       return cb({
         ok:true, room:roomPayload(room), yourSlot:p.slot, playerId:p.playerId, resumeToken:p.token,
-        lastSnapshot:room.lastSnapshot||null, playerState:ps, becameHost:p.token===room.hostToken,
+        lastSnapshot:room.lastSnapshot||null, latestSnapshot:room.lastLiteSnapshot||room.lastSnapshot||null,
+        playerState:ps, becameHost:p.token===room.hostToken,
         hostEpoch:Math.max(1,Number(room.hostEpoch)||1), alreadyConnected:true
       });
     }
@@ -322,6 +324,7 @@ io.on('connection', socket => {
         paused: false,
         createdAt: Date.now(),
         lastSnapshot: null,
+        lastLiteSnapshot: null,
         lastSnapshotAt: 0,
         pendingActions: new Map()
       };
@@ -381,6 +384,7 @@ io.on('connection', socket => {
     room.started = true;
     room.paused = false;
     room.lastSnapshot = null;
+    room.lastLiteSnapshot = null;
     room.lastSnapshotAt = 0;
     const payload = roomPayload(room);
     io.to(room.code).emit('game:start', payload);
@@ -422,8 +426,9 @@ io.on('connection', socket => {
       rememberStates(room, payload);
       socket.to(room.code).emit('game:snapshot', payload);
     } else {
-      // Snapshots de combate são voláteis: se a conexão estiver ocupada, descarta o frame velho
-      // em vez de formar uma fila que deixa o convidado segundos atrás do host.
+      // Mantém o quadro leve mais recente em memória para retomada/migração sem rebobinar o mundo.
+      room.lastLiteSnapshot = payload;
+      // Snapshots de combate são voláteis: se a conexão estiver ocupada, descarta o frame velho.
       socket.to(room.code).volatile.emit('game:snapshot', payload);
     }
   });
