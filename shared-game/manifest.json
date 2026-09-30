@@ -1,0 +1,20 @@
+{
+  "repository": "pandapidio/pandapidio-games",
+  "frontendCommit": "55502fa8f1f31739c77b5ee308b6eeeaa56557cf",
+  "files": {
+    "index.html": "f00652042c568d9d07822af38207b75569fa97edf4914c76f87cea5656d6fac8",
+    "version.js": "a18b3e1b07188a8c7fdcfe2080c1aa8aa2575141892345c8c3d2c80a208af448",
+    "polish.js": "671f4c29347281b2595cae9b88c646eba58e743b50656ef8243c165912279704",
+    "seascape.js": "80233468fdb041da6cb63617f69aa50524e2864e02bd47ffdddf9883df1a412f",
+    "identity.js": "1cdd0b70bfa8a03c5b36e16b8f067412c8205304ef49851ac6537060388d7d82",
+    "chronicle.js": "3d55505322f4f76142c3a2251990a6b1678a04ea47a0860c7553d2f288cbe822",
+    "encounters.js": "66c25266399648777ae87c61a895ce3aa7589257be69afde5df340db5c432a0d",
+    "admirals.js": "ea4d285d3bb41eda340c73102f30e3016fa29aeead3db5129ae1f22fac18452a",
+    "voyage.js": "8e2128cd3bfc9cb28e908caeb082e31008fdda8c3e21753a7a7696163d1cf6eb",
+    "builds.js": "48ed526ccc44e89b0b650828875d6487d9ba9f72e7b9c33a08f01aa1ea86a798",
+    "refinement.js": "bcff453f9fc6a8cb3226c8bf817cde8f2ac9f8c9f223cd3b992eaf2e931a0d39",
+    "game.js": "bbf2ca7430721a1503a65e8689a21cb507f1bc3095266ea86c7e2b1471216c38",
+    "endgame.js": "5cae9ad25ac730621668319dee0d8b355e5fe07b3d3dca8f77d205ca9c48d5b8",
+    "multiplayer-local-v4.js": "a5438d8148b6219e737dbd502a363ae5a50a00b706e74a419a866401a722b7b8"
+  }
+}

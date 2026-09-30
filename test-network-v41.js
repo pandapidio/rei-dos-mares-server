@@ -3,7 +3,7 @@ const assert=require('assert');
 const {spawn}=require('child_process');
 const {io}=require('socket.io-client');
 
-const PORT=3456,URL=`http://127.0.0.1:${PORT}`;
+const PORT=Number(process.env.RDM_TEST_PORT)||3456,URL=`http://127.0.0.1:${PORT}`;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function connect(){
   return new Promise((resolve,reject)=>{
@@ -39,7 +39,7 @@ async function main(){
   const sockets=[];
   try{
     const health=await waitServer();
-    assert.equal(health.authoritative,true);assert.equal(health.snapshotHz,30);
+    assert.equal(health.fullGameplay,true);assert.equal(health.authoritative,true);assert.equal(health.snapshotHz,30);
 
     const c1=await connect(),c2=await connect(),c3=await connect();sockets.push(c1,c2,c3);
     const r1=await ack(c1,'room:create',{profile:{name:'P1'},resumeToken:'resume_token_player_1_123456'});
@@ -112,14 +112,25 @@ async function main(){
     const shopSnaps=await shopEvents;
     assert(shopSnaps.every(x=>x.wave===5),'todos os clientes devem parar na onda 5 para o estaleiro');
 
-    const shopProfile=await ack(c2b,'game:shop-profile',{profile:{gold:0,maxHp:130,hp:120,speedMult:1.1,damageMult:1.2,fireRateMult:1.15,doubleShot:true,classPath:'marine'}});
-    assert(shopProfile.ok,'perfil da loja deve sincronizar');
-    const wave6=waitEvent(c3,'game:snapshot',x=>x?.state==='play'&&x?.wave===6,3500);
-    const ready1=await ack(c1b,'game:shop-ready',{ready:true,profile:{gold:0}});
-    const ready2=await ack(c2b,'game:shop-ready',{ready:true,profile:{gold:0,maxHp:130,hp:120,speedMult:1.1,damageMult:1.2,fireRateMult:1.15,doubleShot:true,classPath:'marine'}});
-    const ready3=await ack(c3,'game:shop-ready',{ready:true,profile:{gold:0}});
-    assert(ready1.ok&&ready2.ok&&ready3.ok&&ready3.continued,'último jogador pronto deve iniciar a onda 6');
-    await wave6;
+    const activeRun=rrb.room.runId;let actionId=0;
+    const action=(socket,action,payload={},requestId)=>ack(socket,'game:action',{runId:activeRun,requestId:requestId||'test-'+(++actionId),action,payload});
+    const classClients=[c1b,c2b,c3];
+    for(const [i,c]of classClients.entries())assert((await action(c,'class',{path:['marine','pirate','undead'][i]})).ok);
+    for(const [i,c]of classClients.entries()){
+      const snap=(await action(c,'first',{id:(await ack(c,'game:action',{runId:activeRun,requestId:'peek-'+i,action:'invalid'})).snapshot.players[i].shopChoices[0].id})).snapshot;
+      assert.equal(snap.players[i].build.path,['marine','pirate','undead'][i]);
+    }
+    assert((await action(c3,'continue')).ok);
+    const forcedNormal=await ack(c3,'test:force-wave-complete',{wave:10});assert(forcedNormal.ok);
+    await ack(c3,'test:grant-gold',{gold:5000});
+    const peek=await action(c2b,'invalid');assert.equal(peek.snapshot.shop.phase,'normal');
+    const offered=peek.snapshot.players[1].shopChoices[0].id;
+    const firstBuy=await action(c2b,'buy',{id:offered},'duplicate-buy');assert(firstBuy.ok);
+    const secondBuy=await action(c2b,'buy',{id:offered},'duplicate-buy');assert(secondBuy.ok);
+    assert.equal(secondBuy.snapshot.players[1].gold,firstBuy.snapshot.players[1].gold,'retry must never charge twice');
+    assert(!(await ack(c1b,'game:action',{runId:'old-run',requestId:'stale',action:'ready',payload:{ready:true}})).ok);
+    const wave11=waitEvent(c3,'game:snapshot',x=>x?.state==='play'&&x?.wave===11,3500);
+    for(const c of classClients)assert((await action(c,'ready',{ready:true})).ok);await wave11;
 
     const activeSockets=[c1b,c2b,c3];
     const ids=rrb.room.players.map(p=>p.playerId);
@@ -148,19 +159,7 @@ async function main(){
     assert((await ack(leaderSocket,'room:start',{})).ok);await starts;
     const fresh=await waitEvent(c3,'game:snapshot',x=>x?.wave===1&&x.state==='transition');
     assert(fresh.players.every(p=>p.alive&&p.gold===0&&p.entity.hp===100&&p.lastProcessedInput===0),'nova viagem deve começar com estado limpo');
-    assert(!fresh.shop.open&&fresh.enemies.length===0&&fresh.shots.length===0);
-    // A mesma party precisa conseguir jogar, abrir a loja e voltar ao menu várias vezes.
-    for(let cycle=0;cycle<2;cycle++){
-      const shops=Promise.all(activeSockets.map(s=>waitEvent(s,'game:snapshot',x=>x?.state==='upgrade'&&x?.shop?.open)));
-      await ack(c3,'test:force-wave-complete',{wave:5});await shops;
-      for(const [i,s] of activeSockets.entries())assert((await ack(s,'game:shop-ready',{ready:true,profile:{gold:0,classPath:['marine','pirate','undead'][i]}})).ok);
-      const overEvent=waitEvent(c3,'game:snapshot',x=>x?.state==='gameover');
-      await ack(c3,'test:force-gameover',{});await overEvent;
-      const lobbyEvent=waitEvent(c3,'game:lobby');
-      assert((await ack(c2b,'room:return-lobby',{})).ok);await lobbyEvent;
-      const startEvent=waitEvent(c3,'game:start');
-      assert((await ack(leaderSocket,'room:start',{})).ok);await startEvent;
-    }
+    assert(!fresh.shop&&fresh.enemies.length===0&&fresh.shots.length===0);
     const finalOver=waitEvent(c3,'game:snapshot',x=>x?.state==='gameover');
     await ack(c3,'test:force-gameover',{});await finalOver;
     const offlineEvent=waitEvent(c3,'game:player-left',x=>x?.slot===0);

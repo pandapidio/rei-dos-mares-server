@@ -1,4 +1,4 @@
-name: Validate Multiplayer V4.2
+name: Validate Multiplayer V4.3
 
 on:
   push:
@@ -6,8 +6,10 @@ on:
       - main
     paths:
       - 'server.js'
-      - 'simulation-v4.js'
-      - 'test-v4.js'
+      - 'full-simulation.js'
+      - 'shared-game/**'
+      - 'scripts/**'
+      - 'test-full-game.js'
       - 'test-network-v41.js'
       - 'package.json'
       - 'package-lock.json'
@@ -26,6 +28,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - name: Verify shared source matches frontend release
+        run: |
+          COMMIT=$(node -p "require('./shared-game/manifest.json').frontendCommit")
+          git clone --filter=blob:none https://github.com/pandapidio/pandapidio-games.git /tmp/rdm-frontend-reference
+          git -C /tmp/rdm-frontend-reference checkout "$COMMIT"
+          RDM_FRONTEND_SOURCE=/tmp/rdm-frontend-reference/games/rei-dos-mares node scripts/check-game-source.js
       - run: npm test
       - name: Install network test client
         run: npm install --no-save socket.io-client@4.8.4
@@ -42,18 +50,18 @@ jobs:
             sleep 0.25
           done
           cat /tmp/health.json
-          node -e "const h=require('/tmp/health.json'); if(!h.ok||h.protocol!=='rdm-v4'||h.authoritative!==true||h.simulationHz!==60||h.snapshotHz!==30) process.exit(1)"
+          node -e "const h=require('/tmp/health.json'); if(!h.ok||h.protocol!=='rdm-v4'||h.fullGameplay!==true||h.authoritative!==true||h.simulationHz!==60||h.snapshotHz!==30) process.exit(1)"
           kill $PID
           wait $PID || true
           trap - EXIT
-      - name: Wait for Railway V4.2 and smoke public WebSocket
+      - name: Wait for Railway V4.3 and smoke public WebSocket
         shell: bash
         run: |
           URL='https://rei-dos-mares-server-production.up.railway.app'
           READY=0
           for i in {1..60}; do
             if curl -fsS "$URL/health" > /tmp/public-health.json; then
-              if node -e "const h=require('/tmp/public-health.json'); process.exit(h.version==='4.2.1-authoritative-beta'&&h.protocol==='rdm-v4'&&h.authoritative===true?0:1)"; then
+              if node -e "const h=require('/tmp/public-health.json'); process.exit(h.version==='4.3.0-full-gameplay'&&h.protocol==='rdm-v4'&&h.authoritative===true?0:1)"; then
                 READY=1
                 break
               fi
@@ -69,7 +77,7 @@ jobs:
           const timer=setTimeout(()=>{console.error('public websocket timeout');s.disconnect();process.exit(1)},10000);
           s.on('server:hello',h=>{
             console.log(JSON.stringify({transport:s.io.engine.transport.name,hello:h}));
-            if(h?.version!=='4.2.1-authoritative-beta'||h?.protocol!=='rdm-v4'||!h?.authoritative||s.io.engine.transport.name!=='websocket')process.exitCode=1;
+            if(h?.version!=='4.3.0-full-gameplay'||h?.protocol!=='rdm-v4'||!h?.authoritative||s.io.engine.transport.name!=='websocket')process.exitCode=1;
             clearTimeout(timer);s.disconnect();
           });
           s.on('connect_error',e=>{console.error(e.message);clearTimeout(timer);process.exit(1)});
