@@ -3,7 +3,7 @@ name: Validate Multiplayer V4.1
 on:
   push:
     branches:
-      - main
+      - v4.1.1-input-prediction
     paths:
       - 'server.js'
       - 'simulation-v4.js'
@@ -31,6 +31,21 @@ jobs:
         run: npm install --no-save socket.io-client@4.8.4
       - name: Three-client network pause resume test
         run: node test-network-v41.js
+      - name: Public Railway WebSocket smoke
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const {io}=require('socket.io-client');
+          const url='https://rei-dos-mares-server-production.up.railway.app';
+          const s=io(url,{transports:['websocket'],reconnection:false,timeout:8000,extraHeaders:{Origin:'https://pandapidio.github.io'}});
+          const timer=setTimeout(()=>{console.error('public websocket timeout');s.disconnect();process.exit(1)},10000);
+          s.on('server:hello',h=>{
+            console.log(JSON.stringify({connected:s.connected,transport:s.io.engine.transport.name,hello:h}));
+            if(h?.protocol!=='rdm-v4'||!h?.authoritative||s.io.engine.transport.name!=='websocket')process.exitCode=1;
+            clearTimeout(timer);s.disconnect();
+          });
+          s.on('connect_error',e=>{console.error(e.message);clearTimeout(timer);process.exit(1)});
+          NODE
       - name: Boot server and check health
         shell: bash
         run: |
