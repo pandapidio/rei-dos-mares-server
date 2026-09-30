@@ -1,22 +1,15 @@
-name: Validate Multiplayer V4
+name: Validate Multiplayer V4.1
 
 on:
   push:
     branches:
-      - main
-    paths:
-      - 'server.js'
-      - 'simulation-v4.js'
-      - 'test-v4.js'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/v4-validation.yml'
+      - v4.1-net-pause-mobile
   workflow_dispatch:
 
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,18 +19,22 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
+      - name: Install network test client
+        run: npm install --no-save socket.io-client@4.8.4
+      - name: Three-client network pause resume test
+        run: node test-network-v41.js
       - name: Boot server and check health
         shell: bash
         run: |
-          PORT=3456 FRONTEND_ORIGINS=https://pandapidio.github.io node server.js > /tmp/rdm-v4.log 2>&1 &
+          PORT=3456 FRONTEND_ORIGINS=https://pandapidio.github.io node server.js > /tmp/rdm-v41.log 2>&1 &
           PID=$!
-          trap 'kill $PID || true; cat /tmp/rdm-v4.log' EXIT
+          trap 'kill $PID || true; cat /tmp/rdm-v41.log' EXIT
           for i in {1..24}; do
             if curl -fsS http://127.0.0.1:3456/health > /tmp/health.json; then break; fi
             sleep 0.25
           done
           cat /tmp/health.json
-          node -e "const h=require('/tmp/health.json'); if(!h.ok||h.protocol!=='rdm-v4'||h.authoritative!==true||h.simulationHz!==60||h.snapshotHz!==20) process.exit(1)"
+          node -e "const h=require('/tmp/health.json'); if(!h.ok||h.protocol!=='rdm-v4'||h.authoritative!==true||h.simulationHz!==60||h.snapshotHz!==30) process.exit(1)"
           kill $PID
           wait $PID || true
           trap - EXIT
