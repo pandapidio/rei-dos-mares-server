@@ -52,8 +52,13 @@ async function main(){
     [c1,c2,c3].forEach((s,i)=>s.on('game:snapshot',snap=>{count[i]++;latest[i]=snap;}));
     const started=Promise.all([waitEvent(c1,'game:start'),waitEvent(c2,'game:start'),waitEvent(c3,'game:start')]);
     const sr=await ack(c1,'room:start',{});assert(sr.ok);await started;
-    await sleep(800);
-    assert(count.every(n=>n>=12),'snapshot stream should be near 30Hz for all clients');
+    await Promise.all([
+      waitEvent(c1,'game:snapshot',x=>x?.state==='play',6500),
+      waitEvent(c2,'game:snapshot',x=>x?.state==='play',6500),
+      waitEvent(c3,'game:snapshot',x=>x?.state==='play',6500)
+    ]);
+    const baseline=[...count];await sleep(500);
+    assert(count.every((n,i)=>n-baseline[i]>=10),'snapshot stream should stay near 30Hz for all clients');
 
     c1.emit('game:input',{seq:1,input:{mx:1,my:0,ax:1,ay:0,fire:false}});
     c2.emit('game:input',{seq:1,input:{mx:-1,my:0,ax:-1,ay:0,fire:false}});
