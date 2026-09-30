@@ -1,13 +1,13 @@
 {
   "name": "rei-dos-mares-multiplayer-server",
-  "version": "4.0.0-authoritative-test1",
+  "version": "4.1.0-authoritative-beta",
   "private": true,
   "description": "Servidor autoritativo Socket.IO do Rei dos Mares Multiplayer v4",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "test": "node test-v4.js",
-    "check": "node --check server.js && node --check simulation-v4.js && node --check test-v4.js"
+    "check": "node --check server.js && node --check simulation-v4.js && node --check test-v4.js && node --check test-network-v41.js"
   },
   "engines": {
     "node": ">=20"
