@@ -22,6 +22,25 @@ test('accounts: import only on creation, replacement saves, retries, isolation a
   assert.equal((await request('/feedback','POST',{subject:'Bug na loja',message:'Detalhes <script>alert(1)</script>'},token)).status,201);
   assert.equal((await db.query('SELECT account_id,subject FROM pg_feedback')).rows[0].account_id,a.data.user.id);
   assert.equal((await request('/feedback','GET',null,other.data.token)).status,404); // no public/admin inbox
+  const feedback=(await db.query('SELECT id FROM pg_feedback')).rows[0];
+  assert.equal(a.data.user.isAdmin,false);
+  for(const [route,method] of [['/admin/feedback','GET'],['/admin/feedback/'+feedback.id,'GET'],['/admin/feedback/'+feedback.id,'DELETE'],['/admin/feedback/'+feedback.id+'/restore','POST']])assert.equal((await request(route,method,null,other.data.token)).status,403);
+  assert.equal((await request('/admin/feedback')).status,401);
+  // Explicit database grant, bound to the account ID; browser payloads cannot grant roles.
+  await db.query('UPDATE pg_accounts SET is_admin=true WHERE id=$1',[a.data.user.id]);
+  assert.equal((await request('/me','GET',null,token)).data.user.isAdmin,true);
+  const inbox=await request('/admin/feedback','GET',null,token);assert.equal(inbox.status,200);assert.equal(inbox.data.total,1);assert.equal(inbox.data.items[0].username,'Pandateste');assert.equal(inbox.data.items[0].message,undefined);
+  const detail=await request('/admin/feedback/'+feedback.id,'GET',null,token);assert.equal(detail.data.item.message,'Detalhes <script>alert(1)</script>');assert.equal(detail.data.item.password_hash,undefined);
+  assert.equal((await request('/admin/feedback?offset=-1','GET',null,token)).status,400);
+  assert.equal((await request('/admin/feedback/not-a-uuid','GET',null,token)).status,400);
+  assert.equal((await request('/admin/feedback','GET',null,token,'https://evil.example')).status,403);
+  assert.equal((await request('/admin/feedback/'+feedback.id,'DELETE',null,token)).status,200);
+  assert.equal((await request('/admin/feedback','GET',null,token)).data.total,0);
+  assert.equal((await request('/admin/feedback?trash=1','GET',null,token)).data.total,1);
+  assert.equal((await request('/admin/feedback/'+feedback.id+'/restore','POST',null,token)).status,200);
+  assert.equal((await request('/admin/feedback','GET',null,token)).data.total,1);
+  await db.query('UPDATE pg_accounts SET is_admin=false WHERE id=$1',[a.data.user.id]);
+  assert.equal((await request('/admin/feedback','GET',null,token)).status,403); // revocation takes effect in the same session
   await request('/session','DELETE',null,token);assert.equal((await request('/me','GET',null,token)).status,401);
  }finally{await new Promise(r=>server.close(r));await db.close();}
 });
