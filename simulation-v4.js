@@ -127,7 +127,9 @@ class AuthoritativeSimulation {
     const e={__netId:id('boss_',this),x:W*.5,y:startY,prevX:W*.5,prevY:startY,vx:0,vy:0,r:92,hp:max,max,type:'boss',role:'flagship',variant:'boss',isBoss:true,bossKind:'marine',phase:0,sinking:0,cannonAngle:Math.PI/2,shot:1.25,destroyed:false,
       bossHullY:66,bossHullRx:112,bossHullRy:53,bossBodyY:18,bossBodyRx:78,bossBodyRy:102};
     this.enemies=[e];this.enemyShots=[];
-    this.bossFight={kind:'marine',defeated:false,intro:introMax,introMax,entryProgress:0,entryStartY:startY,entryTargetY:targetY,cfg:{name:'ALMIRANTE DA MARINHA',hp:max}};
+    this.bossFight={kind:'marine',defeated:false,intro:introMax,introMax,entryProgress:0,entryStartY:startY,entryTargetY:targetY,
+      stage:1,phase:0,phaseBarrier:0,attack:null,endless:false,silence:0,
+      cfg:{name:'ALMIRANTE DA MARINHA',hp:max,damage:17,speed:54,gold:220}};
   }
   targetFor(enemy){
     let best=null,bd=Infinity;for(const p of this.players){if(!p.connected||!p.alive)continue;const d=dist2(enemy,p.entity);if(d<bd){bd=d;best=p;}}return best;
