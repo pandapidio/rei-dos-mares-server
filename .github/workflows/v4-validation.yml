@@ -64,7 +64,7 @@ jobs:
           READY=0
           for i in {1..60}; do
             if curl -fsS "$URL/health" > /tmp/public-health.json; then
-              if node -e "const h=require('/tmp/public-health.json'); process.exit(h.version==='4.3.0-full-gameplay'&&h.protocol==='rdm-v4'&&h.authoritative===true?0:1)"; then
+              if node -e "const h=require('/tmp/public-health.json'); process.exit(h.portalVersion==='1.0.0'&&h.version==='4.3.0-full-gameplay'&&h.protocol==='rdm-v4'&&h.authoritative===true?0:1)"; then
                 READY=1
                 break
               fi

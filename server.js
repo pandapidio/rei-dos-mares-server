@@ -367,7 +367,7 @@ setInterval(()=>{
 app.get('/',(_req,res)=>res.json({ok:true,service:'Rei dos Mares Multiplayer v4',version:VERSION,protocol:'rdm-v4',authoritative:true}));
 app.get('/health',(_req,res)=>{
   const active=[...rooms.values()].filter(r=>r.started&&r.sim).length;
-  res.json({ok:true,version:VERSION,protocol:'rdm-v4',authoritative:true,fullGameplay:true,simulationHz:60,snapshotHz:30,rooms:rooms.size,activeMatches:active,connections:io.engine.clientsCount,now:Date.now()});
+  res.json({ok:true,portalVersion:'1.0.0',accountsReady:!!process.env.DATABASE_URL,version:VERSION,protocol:'rdm-v4',authoritative:true,fullGameplay:true,simulationHz:60,snapshotHz:30,rooms:rooms.size,activeMatches:active,connections:io.engine.clientsCount,now:Date.now()});
 });
 
 async function start(){
