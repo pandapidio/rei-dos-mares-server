@@ -34,7 +34,7 @@ async function waitServer(){
   throw new Error('server did not boot');
 }
 async function main(){
-  const child=spawn(process.execPath,['server.js'],{env:{...process.env,PORT:String(PORT),FRONTEND_ORIGINS:'http://127.0.0.1:3456'},stdio:['ignore','pipe','pipe']});
+  const child=spawn(process.execPath,['server.js'],{env:{...process.env,PORT:String(PORT),FRONTEND_ORIGINS:'http://127.0.0.1:3456',RDM_TESTING:'1'},stdio:['ignore','pipe','pipe']});
   let logs='';child.stdout.on('data',d=>logs+=d);child.stderr.on('data',d=>logs+=d);
   const sockets=[];
   try{
@@ -102,7 +102,28 @@ async function main(){
     const rrb=await ack(c1b,'room:resume',{code,resumeToken:t1});
     assert(rrb.ok&&rrb.snapshot?.authoritativeV4,'leader must resume without host migration');
 
-    const dbg={ok:true,snapshots:count,pausedRevision:ur.revision,p2ResumeSeq:ackSeq,p3Movement:Math.round(p3After-p3Before),room:code};
+    const beforeRestart=rrb.room.restartRevision||0;
+    const forced=await ack(c3,'test:force-gameover',{});
+    assert(forced.ok,'test must force authoritative game over');
+    const over=await waitEvent(c3,'game:snapshot',x=>x?.state==='gameover',2500);
+    assert.equal(over.state,'gameover');
+
+    const restartEvents=Promise.all([
+      waitEvent(c1b,'game:restart',x=>x?.snapshot?.wave===1,3000),
+      waitEvent(c2b,'game:restart',x=>x?.snapshot?.wave===1,3000),
+      waitEvent(c3,'game:restart',x=>x?.snapshot?.wave===1,3000)
+    ]);
+    const restartAck=await ack(c2b,'game:restart-request',{});
+    assert(restartAck.ok,'any connected player can restart the room');
+    const restarted=await restartEvents;
+    for(const ev of restarted){
+      assert.equal(ev.snapshot.wave,1);
+      assert.equal(ev.snapshot.state,'transition');
+      assert(ev.snapshot.players.filter(p=>p.connected).every(p=>p.alive),'all connected players must restart alive');
+      assert((ev.restartRevision||0)>beforeRestart,'restart revision must increase');
+    }
+
+    const dbg={ok:true,snapshots:count,pausedRevision:ur.revision,p2ResumeSeq:ackSeq,p3Movement:Math.round(p3After-p3Before),restartRevision:restartAck.restartRevision,room:code};
     console.log(JSON.stringify(dbg,null,2));
   }finally{
     for(const s of sockets)try{s.disconnect();}catch(_){}
