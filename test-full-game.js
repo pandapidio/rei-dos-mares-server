@@ -48,13 +48,13 @@ try{
  for(let slot=0;slot<3;slot++)s.performAction(slot,'ready',{ready:true});assert.equal(s.state,'play');
  for(const p of s.players){p.entity.hp=50;p.entity.inv=9999;}
  for(let slot=0;slot<3;slot++)s.setInput(slot,{ax:1,ay:0,fire:true},3);
- advance(s,8.5);
+ for(let i=0;i<8.5*60;i++){if(i%10===0)for(let slot=0;slot<3;slot++)s.setInput(slot,{ax:1,ay:0,fire:true},4+i);s.step(1/60);}
  assert(s.players.every(p=>p.entity.hp>=58),'carpenter heals every captain');
  const snap=s.snapshot();assert(snap.players.every(p=>p.build.path&&p.build.metrics&&p.stats));
  assert(s.shots.some(q=>q.ownerId===0&&q.piercing));assert(s.shots.some(q=>q.ownerId===1&&q.explosive));
  assert(s.shots.some(q=>q.ownerId===2&&q.spectral));
  const oldTicks=s.metrics.ticks;s.setPaused(true);advance(s,1);assert.equal(s.metrics.ticks,oldTicks);s.setPaused(false);
- s.setConnected(0,false);s.players[1].entity.shot=0;advance(s,.1);assert(s.shots.some(q=>q.ownerId===1));s.setConnected(0,true);
+ s.setConnected(0,false);s.setInput(1,{ax:1,fire:true},1000);s.players[1].entity.shot=0;advance(s,.1);assert(s.shots.some(q=>q.ownerId===1));s.setConnected(0,true);
  s.forceWave(60);s.defeatCurrentBoss();assert.equal(s.collectAwards().filter(a=>a.reason==='endlessBoss'&&a.diamonds===2).length,3);
  s.forceWaveComplete(70);assert.equal(s.shop.phase,'spec');
  for(let slot=0;slot<3;slot++){const id=s.players[slot].specChoices[0].id;assert(s.performAction(slot,'spec',{id}).ok);assert(s.players[slot].build.specializations.has(id));}
@@ -66,3 +66,47 @@ try{
  assert(s.performAction(1,'reroll',{}).ok);assert(!s.performAction(1,'reroll',{}).ok);
  console.log(JSON.stringify({ok:true,enemies:[...roles],events:[...events],upgrades:ids.size,bosses:3,allCaptainsFire:true,allCaptainsHeal:true,soloDifficulty:true,specializations:true,repairDonationRevive:true}));
 }finally{s.dispose();}
+
+const r=new FullSimulation(metas);
+try{
+ advance(r,5);
+ r.setInput(0,{ax:1,fire:true},20);advance(r,.8);
+ assert(!r.lastInputs.has(0),'stale shooting commands expire');
+ assert(!r.window.ReiMultiplayerLocal.remoteInputs.get(0).fire);
+ assert(!r.setInput(0,{fire:true},NaN));assert(!r.setInput(0,{fire:true},Infinity));
+ r.setInput(1,{fire:true},50);r.setConnected(1,false);r.setConnected(1,true);
+ assert(!r.lastInputs.has(1),'reconnect must release stale fire');
+ assert(r.setInput(1,{fire:false},51),'resume uses acknowledged sequence');
+ run(r,`{
+   const mp=ReiMultiplayerLocal,p=mp.players[1];
+   player=p.entity;gold=p.gold;acquiredUpgrades=p.upgrades;buildRun=p.build;
+   const enemy=()=>({hp:1,max:100,type:'light',role:'scout',x:300,y:300,sinking:0,destroyed:false,spawnShield:0});
+   const e=enemy();enemies=[e];applyEnemyDamage(e,999,'shot');destroyEnemy(e);
+   const blast=enemy();enemies=[blast];explodeShot({damage:999,life:1},300,300,blast);
+   const burn=enemy();burn.burn={ownerId:1,time:10,acc:1,age:0};enemies=[burn];updateEnemyBurns(.1);
+ }`);
+ assert.equal(r.players[1].gold,30,'shot, explosion and burn award the killer once');
+ assert.equal(r.players[0].gold,0);assert.equal(r.players[2].gold,0);
+ assert.equal(r.players[1].stats.kills,3);
+ r.forceWave(15);
+ const bossReward=run(r,'bossFight.cfg.gold');
+ const goldBefore=r.players.map(p=>p.gold);
+ run(r,`{const p=ReiMultiplayerLocal.players[1];player=p.entity;gold=p.gold;acquiredUpgrades=p.upgrades;buildRun=p.build;const e=enemies.find(e=>e.isBoss);bossFight.intro=0;defeatBoss(e);defeatBoss(e);}`);
+ assert.equal(r.players[1].gold-goldBefore[1],Math.floor(bossReward/3)+(bossReward%3>1?1:0)+10,'boss killer gets shared prize plus bonus');
+ assert.equal(r.players[0].gold-goldBefore[0],Math.floor(bossReward/3)+(bossReward%3>0?1:0));
+ assert.notEqual(r.players[0].entity,r.players[1].entity,'boss rewards preserve captain identity');
+ r.forceWave(1);r.state='play';
+ const mp=r.window.ReiMultiplayerLocal;
+ mp.localSlot=1;mp.setOnlineRole(false,1);mp.online.authoritative=true;mp.online.localInput=()=>mp.localInput();
+ r.window.RDMOnline.socket={connected:false};r.window.RDMOnline.state={started:true,lastSnapshotAt:r.window.performance.now()};
+ run(r,'mouse.down=true;player.shot=0;shots=[];update(.02);shoot();');
+ assert.equal(r.shots.length,0,'disconnected client must not manufacture harmless shots');
+ r.window.RDMOnline.socket.connected=true;
+ r.window.RDMOnline.state.lastSnapshotAt=r.window.performance.now()-2000;
+ run(r,'player.shot=0;update(.02);shoot();');assert.equal(r.shots.length,0,'stalled snapshots stop visual firing');
+ r.window.RDMOnline.state.lastSnapshotAt=r.window.performance.now();
+ run(r,'player.shot=0;update(.02);');assert(r.shots.length>0,'fresh connection permits prediction');
+ r.window.dispatchEvent(new r.window.Event('blur'));
+ assert.equal(r.window.ReiMultiplayerLocal.localInput().fire,false);
+ console.log('Input expiry, reconnect, killer gold and boss identity regressions passed');
+}finally{r.dispose();}

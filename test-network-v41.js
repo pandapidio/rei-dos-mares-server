@@ -83,6 +83,18 @@ async function main(){
     const rr=await ack(c2b,'room:resume',{code,resumeToken:t2});
     assert(rr.ok);assert.equal(rr.room.paused,true);assert.equal(rr.snapshot.roomPaused,true);
     const ackSeq=Number(rr.snapshot.players[1].lastProcessedInput)||0;
+    // A reload may connect before the old transport has timed out.
+    const replacementEvent=waitEvent(c2b,'session:replaced');
+    const replacement=await connect();sockets.push(replacement);
+    const takeover=await ack(replacement,'room:resume',{code,resumeToken:t2});
+    assert(takeover.ok&&takeover.playerId===r2.playerId);await replacementEvent;
+    assert(!(await ack(c2b,'game:pause-request',{paused:false})).ok,'old transport loses control');
+    const returnEvent=waitEvent(replacement,'session:replaced');
+    assert((await ack(c2b,'room:resume',{code,resumeToken:t2})).ok);await returnEvent;
+    replacement.disconnect();
+    assert(!(await ack(c3,'room:resume',{code,resumeToken:'invalid_token_12345678'})).ok);
+    const leaveAck=await ack(c2b,'room:leave',{permanent:false});assert(leaveAck.ok);
+    assert((await ack(c2b,'room:resume',{code,resumeToken:t2})).ok,'leave and immediate return on same socket');
 
     const unpauseEvent=waitEvent(c3,'game:pause-state',x=>x?.paused===false);
     const ur=await ack(c2b,'game:pause-request',{paused:false});assert(ur.ok&&!ur.paused);await unpauseEvent;

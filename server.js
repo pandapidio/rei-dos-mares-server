@@ -193,7 +193,11 @@ function resume(socket,payload,cb){
   const p=byToken(room,token);if(!p)return cb({ok:false,error:'Sessão de retorno inválida.'});
   if(p.connected){
     if(p.socketId===socket.id)return cb({ok:true,room:roomPayload(room),yourSlot:p.slot,playerId:p.playerId,resumeToken:p.token,snapshot:roomSnapshot(room,true),alreadyConnected:true});
-    return cb({ok:false,error:'Este capitão já está conectado em outra aba ou dispositivo.'});
+    // Possession of the unguessable resume token transfers this captain, never duplicates it.
+    const oldSocket=io.sockets.sockets.get(p.socketId);
+    if(oldSocket){detach(oldSocket,room);oldSocket.emit('session:replaced');}
+    p.connected=false;p.socketId=null;p.reconnectUntil=Date.now()+REJOIN_MS;
+    room.sim?.setConnected(p.slot,false);
   }
   if(p.expired||!p.reconnectUntil||Date.now()>p.reconnectUntil)return cb({ok:false,error:'O tempo de retorno terminou.'});
   leaveCurrent(socket,true);clearTimeout(p.expireTimer);p.expireTimer=null;attach(socket,room,p);
