@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - v4.2-death-restart-polish
     paths:
       - 'server.js'
       - 'simulation-v4.js'
