@@ -3,6 +3,7 @@ name: Validate Multiplayer V4.2
 on:
   push:
     branches:
+      - main
       - v4.2-death-restart-polish
     paths:
       - 'server.js'
