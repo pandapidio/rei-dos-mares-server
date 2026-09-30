@@ -7,8 +7,9 @@
   "scripts": {
     "start": "node server.js",
     "test": "node test-full-game.js",
-    "check": "node --check server.js && node --check full-simulation.js && node --check test-full-game.js && node --check test-network-v41.js && node scripts/check-game-source.js",
-    "test:network": "node test-network-v41.js"
+    "check": "node --check server.js && node --check full-simulation.js && node --check test-full-game.js && node --check test-network-v41.js && node scripts/check-game-source.js && node --check accounts/service.js && node --check accounts/public/auth.js",
+    "test:network": "node test-network-v41.js",
+    "test:accounts": "node --test test-accounts.js"
   },
   "engines": {
     "node": ">=20"
@@ -17,6 +18,10 @@
   "dependencies": {
     "express": "^5.2.1",
     "jsdom": "^26.1.0",
+    "pg": "^8.23.1",
     "socket.io": "^4.8.4"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8"
   }
 }

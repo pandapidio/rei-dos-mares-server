@@ -8,6 +8,8 @@ on:
       - 'server.js'
       - 'full-simulation.js'
       - 'shared-game/**'
+      - 'accounts/**'
+      - 'test-accounts.js'
       - 'scripts/**'
       - 'test-full-game.js'
       - 'test-network-v41.js'
@@ -35,6 +37,7 @@ jobs:
           git -C /tmp/rdm-frontend-reference checkout "$COMMIT"
           RDM_FRONTEND_SOURCE=/tmp/rdm-frontend-reference/games/rei-dos-mares node scripts/check-game-source.js
       - run: npm test
+      - run: npm run test:accounts
       - name: Install network test client
         run: npm install --no-save socket.io-client@4.8.4
       - name: Three-client network pause resume party shop test

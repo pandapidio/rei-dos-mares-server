@@ -7,6 +7,10 @@ const { Server } = require('socket.io');
 const { FullSimulation } = require('./full-simulation');
 
 const app = express();
+// Railway forwards HTTPS and the client IP through its edge proxy.
+if(process.env.RAILWAY_ENVIRONMENT_ID)app.set('trust proxy',1);
+const {installAccounts}=require('./accounts/service');
+const {Pool}=require('pg');
 const httpServer = http.createServer(app);
 const PORT = Number(process.env.PORT) || 3000;
 const VERSION = '4.3.0-full-gameplay';
@@ -366,6 +370,9 @@ app.get('/health',(_req,res)=>{
   res.json({ok:true,version:VERSION,protocol:'rdm-v4',authoritative:true,fullGameplay:true,simulationHz:60,snapshotHz:30,rooms:rooms.size,activeMatches:active,connections:io.engine.clientsCount,now:Date.now()});
 });
 
+async function start(){
+ const db=process.env.DATABASE_URL?new Pool({connectionString:process.env.DATABASE_URL}):null;
+ await installAccounts(app,{db,origins:ALLOWED_ORIGINS});
 httpServer.listen(PORT,'0.0.0.0',()=>{
   console.log('======================================');
   console.log(' REI DOS MARES V4 - AUTHORITATIVE TEST');
@@ -374,3 +381,6 @@ httpServer.listen(PORT,'0.0.0.0',()=>{
   console.log('Port:',PORT);
   console.log('Origins:',[...ALLOWED_ORIGINS].join(', '));
 });
+
+}
+start().catch(()=>{console.error('Falha ao inicializar o serviço de contas/banco.');process.exit(1);});
