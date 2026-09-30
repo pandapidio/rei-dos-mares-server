@@ -1,4 +1,4 @@
-name: Validate Multiplayer V4.1
+name: Validate Multiplayer V4.2
 
 on:
   push:
@@ -29,7 +29,7 @@ jobs:
       - run: npm test
       - name: Install network test client
         run: npm install --no-save socket.io-client@4.8.4
-      - name: Three-client network pause resume test
+      - name: Three-client network pause resume restart test
         run: node test-network-v41.js
       - name: Boot server and check health
         shell: bash
