@@ -4,12 +4,12 @@ const express = require('express');
 const http = require('http');
 const crypto = require('crypto');
 const { Server } = require('socket.io');
-const { AuthoritativeSimulation } = require('./simulation-v4');
+const { FullSimulation } = require('./full-simulation');
 
 const app = express();
 const httpServer = http.createServer(app);
 const PORT = Number(process.env.PORT) || 3000;
-const VERSION = '4.2.1-authoritative-beta';
+const VERSION = '4.3.0-full-gameplay';
 const REJOIN_MS = Math.max(10_000, Number(process.env.REJOIN_MS) || 30_000);
 const MAX_PLAYERS = 3;
 const rooms = new Map();
@@ -76,6 +76,7 @@ function isLobbyLeader(room,socket){const p=lobbyLeader(room);return !!p&&p.conn
 function roomSnapshot(room,full=false){
   const snap=room.sim?.snapshot(!!full)||null;
   if(!snap)return null;
+  snap.runId=room.runId;
   snap.roomPaused=!!room.paused;
   snap.pauseRevision=Number(room.pauseRevision)||0;
   return snap;
@@ -84,11 +85,13 @@ function roomPayload(room){
   const leader=lobbyLeader(room);
   return {
     code:room.code,
+    runId:room.runId,
     started:room.started,
     paused:room.paused,
     pauseRevision:Number(room.pauseRevision)||0,
     restartRevision:Number(room.restartRevision)||0,
     authoritative:true,
+    fullGameplay:true,
     protocol:'rdm-v4',
     maxPlayers:MAX_PLAYERS,
     hostId:leader?.socketId||null,
@@ -126,7 +129,7 @@ function playerMeta(p){return {playerId:p.playerId,...p.profile};}
 
 function deleteRoomIfEmpty(room){
   if(!connected(room).length && sorted(room).every(p=>p.expired||!p.connected)){
-    room.destroyed=true;rooms.delete(room.code);
+    room.destroyed=true;room.sim?.dispose();rooms.delete(room.code);
   }
 }
 function scheduleExpiry(room,p){
@@ -140,7 +143,7 @@ function scheduleExpiry(room,p){
       live.players.delete(q.token);sorted(live).forEach((p,i)=>p.slot=i);
       emitRoom(live);deleteRoomIfEmpty(live);return;
     }
-    live.sim?.setConnected(q.slot,false);
+    live.sim?.expirePlayer(q.slot);
     io.to(live.code).emit('game:player-expired',{slot:q.slot,playerId:q.playerId,name:q.profile.name});
     emitRoom(live);deleteRoomIfEmpty(live);
   },Math.max(10,until-Date.now()+40));
@@ -167,7 +170,7 @@ function suspendStarted(socket,room,p){
 }
 function expireStarted(socket,room,p){
   clearTimeout(p.expireTimer);p.expireTimer=null;p.connected=false;p.socketId=null;p.expired=true;p.reconnectUntil=0;
-  room.sim?.setConnected(p.slot,false);detach(socket,room);
+  room.sim?.expirePlayer(p.slot);detach(socket,room);
   io.to(room.code).emit('game:player-expired',{slot:p.slot,playerId:p.playerId,name:p.profile.name});
   if(p.token===room.lobbyLeaderToken)promoteLobbyLeader(room);
   emitRoom(room);deleteRoomIfEmpty(room);return {reconnectUntil:0};
@@ -218,8 +221,9 @@ function startRoom(socket,cb){
   if(room.started)return cb({ok:false,error:'Esta viagem já foi iniciada.'});
   if(!isLobbyLeader(room,socket))return cb({ok:false,error:'Somente o líder da sala pode iniciar.'});
   if(connected(room).length<2)return cb({ok:false,error:'Aguarde pelo menos mais um capitão.'});
-  room.started=true;room.paused=false;room.pauseRevision=0;room.autoPausedNoPlayers=false;
-  room.sim=new AuthoritativeSimulation(sorted(room).map(playerMeta));
+  room.runId=rid('run_');room.started=true;room.paused=false;room.pauseRevision=0;room.autoPausedNoPlayers=false;
+  for(const p of sorted(room)){p.actionResults=new Map();p.pendingAwards=new Map();}
+  room.sim=new FullSimulation(sorted(room).map(playerMeta));
   for(const p of sorted(room))room.sim.setConnected(p.slot,!!p.connected&&!p.expired);
   const payload=roomPayload(room);io.to(room.code).emit('game:start',payload);emitRoom(room);
   cb({ok:true,authoritative:true});
@@ -230,7 +234,8 @@ function returnToLobby(socket,cb){
   if(!room||!requester?.connected)return cb({ok:false,error:'Sala indisponível.'});
   if(!room.started)return cb({ok:true,room:roomPayload(room)});
   if(!['gameover','victory'].includes(room.sim?.state))return cb({ok:false,error:'A viagem ainda está em andamento.'});
-  room.started=false;room.sim=null;room.paused=false;room.autoPausedNoPlayers=false;
+  room.lastAwardAt=0;emitAwards(room);
+  room.started=false;room.sim?.dispose();room.sim=null;room.paused=false;room.autoPausedNoPlayers=false;
   room.pauseRevision=0;
   // A sala e as identidades continuam existindo. Só a partida encerrada é descartada.
   for(const p of sorted(room))if(p.expired){clearTimeout(p.expireTimer);room.players.delete(p.token);}
@@ -244,7 +249,7 @@ function returnToLobby(socket,cb){
 }
 
 io.on('connection',socket=>{
-  socket.emit('server:hello',{id:socket.id,version:VERSION,protocol:'rdm-v4',authoritative:true,reconnectSeconds:Math.round(REJOIN_MS/1000)});
+  socket.emit('server:hello',{id:socket.id,version:VERSION,protocol:'rdm-v4',authoritative:true,fullGameplay:true,reconnectSeconds:Math.round(REJOIN_MS/1000)});
 
   socket.on('room:create',(payload,cb=()=>{})=>{try{createRoom(socket,payload,cb);}catch(e){cb({ok:false,error:e.message||'Erro ao criar sala.'});}});
   socket.on('room:join',(payload,cb=()=>{})=>joinRoom(socket,payload,cb));
@@ -260,28 +265,24 @@ io.on('connection',socket=>{
     room.sim.setInput(p.slot,payload?.input||{},payload?.seq||0);
   });
 
-  socket.on('game:shop-profile',(payload,cb=()=>{})=>{
+  socket.on('game:action',(payload,cb=()=>{})=>{
     const room=findRoom(socket),p=room?bySocket(room,socket.id):null;
     if(!room?.started||!p?.connected||!room.sim)return cb({ok:false,error:'Partida indisponível.'});
-    const result=room.sim.applyShopProfile(p.slot,payload?.profile||{});
-    if(result?.ok){
-      const snap=roomSnapshot(room,true);
-      io.to(room.code).emit('game:snapshot',snap);
-      io.to(room.code).emit('game:shop-state',{shop:snap.shop,players:snap.players});
-    }
-    cb(result||{ok:false});
+    if(payload?.runId!==room.runId)return cb({ok:false,error:'Esta ação pertence a outra viagem.'});
+    const requestId=String(payload?.requestId||'').slice(0,160);
+    if(!requestId)return cb({ok:false,error:'Pedido sem identificação.'});
+    p.actionResults ||= new Map();
+    if(p.actionResults.has(requestId))return cb({...p.actionResults.get(requestId),snapshot:roomSnapshot(room,true)});
+    const result=room.sim.performAction(p.slot,String(payload.action||''),payload.payload||{});
+    p.actionResults.set(requestId,result);
+    if(p.actionResults.size>128)p.actionResults.delete(p.actionResults.keys().next().value);
+    const snapshot=roomSnapshot(room,true);
+    io.to(room.code).emit('game:snapshot',snapshot);emitAwards(room);
+    cb({...result,snapshot});
   });
-
-  socket.on('game:shop-ready',(payload,cb=()=>{})=>{
-    const room=findRoom(socket),p=room?bySocket(room,socket.id):null;
-    if(!room?.started||!p?.connected||!room.sim)return cb({ok:false,error:'Partida indisponível.'});
-    if(payload?.profile)room.sim.applyShopProfile(p.slot,payload.profile);
-    const result=room.sim.setShopReady(p.slot,!!payload?.ready);
-    const snap=roomSnapshot(room,true);
-    io.to(room.code).emit('game:snapshot',snap);
-    io.to(room.code).emit('game:shop-state',{shop:snap.shop,players:snap.players,continued:!!result?.continued});
-    cb({...result,shop:snap.shop});
-  });
+  socket.on('game:award-ack',(payload)=>{const room=findRoom(socket),p=room?bySocket(room,socket.id):null;p?.pendingAwards?.delete(String(payload?.id||''));});
+  socket.on('game:shop-profile',(_payload,cb=()=>{})=>cb({ok:false,error:'Atualize o jogo: as compras agora são processadas pelo servidor.'}));
+  socket.on('game:shop-ready',(_payload,cb=()=>{})=>cb({ok:false,error:'Atualize o jogo: as escolhas agora são processadas pelo servidor.'}));
 
   socket.on('game:pause-request',(payload,cb=()=>{})=>{
     const room=findRoom(socket),p=room?bySocket(room,socket.id):null;
@@ -307,16 +308,23 @@ io.on('connection',socket=>{
   if(process.env.RDM_TESTING==='1'){
     socket.on('test:force-gameover',(_payload,cb=()=>{})=>{
       const room=findRoom(socket);if(!room?.started||!room.sim)return cb({ok:false});
-      for(const p of room.sim.players){p.alive=false;p.entity.hp=0;p.entity.vx=0;p.entity.vy=0;}
-      room.sim.state='gameover';room.sim.paused=false;room.paused=false;
+      room.sim.forceGameover();room.paused=false;
       io.to(room.code).emit('game:snapshot',roomSnapshot(room,true));
       cb({ok:true});
+    });
+    socket.on('test:defeat-boss',(_payload,cb=()=>{})=>{const room=findRoom(socket);if(!room?.sim)return cb({ok:false});room.sim.defeatCurrentBoss();io.to(room.code).emit('game:snapshot',roomSnapshot(room,true));cb({ok:true});});
+    socket.on('test:force-wave',(payload,cb=()=>{})=>{
+      const room=findRoom(socket);if(!room?.sim)return cb({ok:false});room.sim.forceWave(Math.max(1,Number(payload?.wave)||1));
+      io.to(room.code).emit('game:snapshot',roomSnapshot(room,true));cb({ok:true});
+    });
+    socket.on('test:grant-gold',(payload,cb=()=>{})=>{
+      const room=findRoom(socket);if(!room?.sim)return cb({ok:false});room.sim.grantGold(Number(payload?.gold)||1000);
+      io.to(room.code).emit('game:snapshot',roomSnapshot(room,true));cb({ok:true});
     });
     socket.on('test:force-wave-complete',(payload,cb=()=>{})=>{
       const room=findRoom(socket);if(!room?.started||!room.sim)return cb({ok:false});
       const w=Math.max(1,Math.floor(Number(payload?.wave)||5));
-      room.sim.wave=w;room.sim.state='play';room.sim.enemies=[];room.sim.shots=[];room.sim.enemyShots=[];
-      room.sim.waveRemainingToSpawn=0;room.sim.waveCompleteTimer=.01;room.sim.bossFight=null;room.sim.bossClearTimer=-1;
+      room.sim.forceWaveComplete(w);io.to(room.code).emit('game:snapshot',roomSnapshot(room,true));
       cb({ok:true,wave:w});
     });
   }
@@ -324,14 +332,26 @@ io.on('connection',socket=>{
   socket.on('disconnect',()=>leaveCurrent(socket,false));
 });
 
+function emitAwards(room){
+  for(const award of room.sim?.collectAwards()||[]){
+    const p=sorted(room).find(p=>p.slot===award.slot);if(!p)continue;
+    p.pendingAwards ||= new Map();const id=room.runId+':'+award.id;
+    p.pendingAwards.set(id,{...award,runId:room.runId,id});
+  }
+  if(Date.now()-(room.lastAwardAt||0)<500)return;room.lastAwardAt=Date.now();
+  for(const p of sorted(room))if(p.connected&&p.socketId)for(const award of p.pendingAwards?.values()||[])io.to(p.socketId).emit('game:meta-award',award);
+}
+
 let lastTick=process.hrtime.bigint();
 setInterval(()=>{
   const now=process.hrtime.bigint(),dt=Math.min(.1,Number(now-lastTick)/1e9);lastTick=now;
   const ms=Date.now();
   for(const room of rooms.values()){
-    if(!room.started||!room.sim||room.destroyed)continue;
-    room.sim.step(dt);
-    if(ms-room.lastBroadcastAt>=33){
+    if(room.destroyed)continue;emitAwards(room);
+    if(!room.started||!room.sim)continue;
+    try{room.sim.step(dt);}catch(e){console.error('[simulation]',room.code,e);room.sim.setPaused(true);io.to(room.code).emit('game:error',{error:'A viagem foi pausada por um erro de simulação.'});}
+    const interval=['play','transition'].includes(room.sim.state)?33:500;
+    if(ms-room.lastBroadcastAt>=interval){
       room.lastBroadcastAt=ms;
       const full=ms-room.lastFullAt>=2200;if(full)room.lastFullAt=ms;
       const snap=roomSnapshot(room,full);
@@ -343,7 +363,7 @@ setInterval(()=>{
 app.get('/',(_req,res)=>res.json({ok:true,service:'Rei dos Mares Multiplayer v4',version:VERSION,protocol:'rdm-v4',authoritative:true}));
 app.get('/health',(_req,res)=>{
   const active=[...rooms.values()].filter(r=>r.started&&r.sim).length;
-  res.json({ok:true,version:VERSION,protocol:'rdm-v4',authoritative:true,simulationHz:60,snapshotHz:30,rooms:rooms.size,activeMatches:active,connections:io.engine.clientsCount,now:Date.now()});
+  res.json({ok:true,version:VERSION,protocol:'rdm-v4',authoritative:true,fullGameplay:true,simulationHz:60,snapshotHz:30,rooms:rooms.size,activeMatches:active,connections:io.engine.clientsCount,now:Date.now()});
 });
 
 httpServer.listen(PORT,'0.0.0.0',()=>{
