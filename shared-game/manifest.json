@@ -1,9 +1,9 @@
 {
   "repository": "pandapidio/pandapidio-games",
-  "frontendCommit": "a10b20d4a9366cf9918cc154873913bea9c2eb9e",
+  "frontendCommit": "dc8560e6ec503a7bddf7346e6358e8a16d2ebea8",
   "files": {
-    "index.html": "e382c071f8d2ad4be1cfcb269acfd42806a2d463eb9046d55e81e59039ca8b46",
-    "version.js": "a18b3e1b07188a8c7fdcfe2080c1aa8aa2575141892345c8c3d2c80a208af448",
+    "index.html": "96b74944c3a5bbe026423e6a19178c4512b3ccc43c68595a41d55aa69fdf7d8f",
+    "version.js": "a42c550bf461bbaef4c02a6ac11b3f718d80d190062b8cb323c7ffe1a4285aa3",
     "polish.js": "671f4c29347281b2595cae9b88c646eba58e743b50656ef8243c165912279704",
     "seascape.js": "80233468fdb041da6cb63617f69aa50524e2864e02bd47ffdddf9883df1a412f",
     "identity.js": "1cdd0b70bfa8a03c5b36e16b8f067412c8205304ef49851ac6537060388d7d82",
@@ -15,6 +15,6 @@
     "refinement.js": "bcff453f9fc6a8cb3226c8bf817cde8f2ac9f8c9f223cd3b992eaf2e931a0d39",
     "game.js": "bbf2ca7430721a1503a65e8689a21cb507f1bc3095266ea86c7e2b1471216c38",
     "endgame.js": "5cae9ad25ac730621668319dee0d8b355e5fe07b3d3dca8f77d205ca9c48d5b8",
-    "multiplayer-local-v4.js": "a5438d8148b6219e737dbd502a363ae5a50a00b706e74a419a866401a722b7b8"
+    "multiplayer-local-v4.js": "4f6d0c91db631a80a8e274c57f5f4b728606e990b2bb238de6b4fd501a121524"
   }
 }

@@ -11,7 +11,7 @@ function drawingContext(){return new Proxy({measureText:t=>({width:String(t).len
 class FullSimulation{
  constructor(metas,opts={}){
   this.dom=new JSDOM(html,{url:'http://localhost:3000/game/',runScripts:'outside-only',pretendToBeVisual:true});
-  const w=this.dom.window;this.window=w;this.context=this.dom.getInternalVMContext();this.acc=0;this.seq=0;this.shopRevision=0;this.lastShop=null;this.awardSeq=0;this.knownSkins=new Set(['default']);this.paused=false;this.lastInputs=new Map();this.lastInputSeq=new Map();this.pendingAwards=[];this.events=[];this.sounds=[];this.soundSeq=0;this.metrics={ticks:0};
+  const w=this.dom.window;this.window=w;this.context=this.dom.getInternalVMContext();this.acc=0;this.seq=0;this.shopRevision=0;this.lastShop=null;this.awardSeq=0;this.knownSkins=new Set(['default']);this.paused=false;this.lastInputs=new Map();this.inputAge=new Map();this.lastInputSeq=new Map();this.pendingAwards=[];this.events=[];this.sounds=[];this.soundSeq=0;this.metrics={ticks:0};
   w.requestAnimationFrame=()=>0;w.cancelAnimationFrame=()=>{};w.setInterval=()=>0;w.clearInterval=()=>{};w.setTimeout=()=>0;w.clearTimeout=()=>{};
   w.matchMedia=()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});
   w.HTMLCanvasElement.prototype.getContext=()=>drawingContext();
@@ -40,19 +40,22 @@ class FullSimulation{
  get shop(){return this.window.ReiMultiplayerLocal.shop;}
  setInput(slot,raw,seq){
   const p=this.players[Number(slot)];if(!p||!p.connected)return false;
-  const last=this.lastInputSeq.get(Number(slot))||0;if(Number(seq)<=last)return false;
+  const last=this.lastInputSeq.get(Number(slot))||0;if(!Number.isSafeInteger(Number(seq))||Number(seq)<=last)return false;
   const num=v=>Math.max(-1,Math.min(1,Number(v)||0));const input={mx:num(raw.mx),my:num(raw.my),ax:num(raw.ax),ay:num(raw.ay),fire:!!raw.fire};
-  this.lastInputSeq.set(Number(slot),Number(seq));this.lastInputs.set(Number(slot),input);
+  this.lastInputSeq.set(Number(slot),Number(seq));this.lastInputs.set(Number(slot),input);this.inputAge.set(Number(slot),0);
   this.window.ReiMultiplayerLocal.setRemoteInput(Number(slot),input);if(Number(slot)===0)this.window.__input0=input;
   return true;
  }
- setConnected(slot,yes){const p=this.players[Number(slot)];if(!p)return false;if(yes){p.connected=true;p.resumeExpired=false;this.window.ReiMultiplayerLocal.restorePlayerFromNet(Number(slot),null);}else this.window.ReiMultiplayerLocal.handlePlayerLeft(Number(slot),true);return true;}
- expirePlayer(slot){return this.window.ReiMultiplayerLocal.handlePlayerLeft(Number(slot),false);}
+ clearInput(slot){slot=Number(slot);this.lastInputs.delete(slot);this.inputAge.delete(slot);this.window.ReiMultiplayerLocal.setRemoteInput(slot,{mx:0,my:0,ax:0,ay:-1,fire:false});}
+ setConnected(slot,yes){this.clearInput(slot);const p=this.players[Number(slot)];if(!p)return false;if(yes){p.connected=true;p.resumeExpired=false;this.window.ReiMultiplayerLocal.restorePlayerFromNet(Number(slot),null);}else this.window.ReiMultiplayerLocal.handlePlayerLeft(Number(slot),true);return true;}
+ expirePlayer(slot){this.clearInput(slot);return this.window.ReiMultiplayerLocal.handlePlayerLeft(Number(slot),false);}
  setPaused(yes){this.paused=!!yes;}
  grantGold(amount){for(const p of this.players)p.gold=amount;vm.runInContext('ReiMultiplayerLocal.renderShop();',this.context);}
  defeatCurrentBoss(){vm.runInContext(`{const e=enemies.find(e=>e.isBoss);if(!e)throw new Error('No boss');bossFight.intro=0;bossFight.phaseBarrier=0;bossFight.barriersUsed={2:true,3:true};defeatBoss(e);}`,this.context);}
  step(dt){this.acc+=Math.min(.25,Math.max(0,Number(dt)||0));let guard=0;while(this.acc>=1/60&&guard++<20){this.acc-=1/60;if(!this.paused)this.tick(1/60);}}
- tick(dt){this.metrics.ticks++;this.window.__dt=dt;const primary=this.players.find(p=>p.connected&&p.alive)||this.players.find(p=>p.connected);this.window.__input0=this.lastInputs.get(primary?.id)||{mx:0,my:0,ax:0,ay:-1,fire:false};vm.runInContext(`{keys.clear();const a=window.__input0||{};if(a.mx>.1)keys.add('d');if(a.mx<-.1)keys.add('a');if(a.my>.1)keys.add('s');if(a.my<-.1)keys.add('w');mouse.x=player.x+(a.ax||0)*1000;mouse.y=player.y+(a.ay??-1)*1000;mouse.down=!!a.fire;update(__dt);if(a.fire)shoot();}`,this.context);}
+ tick(dt){
+  for(const [slot,age]of this.inputAge){const next=age+dt;if(next>.6)this.clearInput(slot);else this.inputAge.set(slot,next);}
+  this.metrics.ticks++;this.window.__dt=dt;const primary=this.players.find(p=>p.connected&&p.alive)||this.players.find(p=>p.connected);this.window.__input0=this.lastInputs.get(primary?.id)||{mx:0,my:0,ax:0,ay:-1,fire:false};vm.runInContext(`{keys.clear();const a=window.__input0||{};if(a.mx>.1)keys.add('d');if(a.mx<-.1)keys.add('a');if(a.my>.1)keys.add('s');if(a.my<-.1)keys.add('w');mouse.x=player.x+(a.ax||0)*1000;mouse.y=player.y+(a.ay??-1)*1000;mouse.down=!!a.fire;update(__dt);if(a.fire)shoot();}`,this.context);}
  snapshot(full=false){
   const mp=this.window.ReiMultiplayerLocal;
   const snap=mp.makeSnapshot({lite:!full});
