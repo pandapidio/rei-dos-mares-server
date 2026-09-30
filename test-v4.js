@@ -74,7 +74,30 @@ sim.resolveCollisions();
 assert(boss.destroyed&&boss.sinking>0,'boss derrotado deve afundar em vez de desaparecer');
 run(sim,1.5);assert(sim.enemies.includes(boss),'boss deve continuar visível durante o naufrágio');
 run(sim,1.7);
-assert.equal(sim.wave,16,'partida deve avançar após a animação de morte do chefe');
+assert.equal(sim.wave,15,'boss de onda múltipla de 5 não pode pular direto para a onda seguinte');
+assert.equal(sim.state,'upgrade','após o boss da onda 15 o estaleiro deve abrir');
+assert(sim.shop.open,'shop autoritativa deve estar aberta após boss');
+sim.setShopReady(0,true);sim.setShopReady(1,true);const bossShopDone=sim.setShopReady(2,true);
+assert(bossShopDone.continued,'último pronto deve liberar a viagem');
+assert.equal(sim.wave,16,'onda 16 começa somente depois do estaleiro');
+assert.equal(sim.state,'play');
+
+const shopSim=new AuthoritativeSimulation(players,{random:()=>0.37});run(shopSim,4.5);
+shopSim.wave=5;shopSim.enemies=[];shopSim.waveRemainingToSpawn=0;shopSim.completeWave();
+assert.equal(shopSim.state,'upgrade','onda 5 deve abrir o estaleiro');
+assert.equal(shopSim.wave,5,'abrir loja não pode incrementar a onda antes da hora');
+assert(shopSim.snapshot(true).shop.open,'snapshot deve informar loja aberta');
+shopSim.players[0].gold=500;
+const prof=shopSim.applyShopProfile(0,{gold:320,maxHp:140,hp:120,speedMult:1.2,damageMult:1.35,fireRateMult:1.25,doubleShot:true,classPath:'marine'});
+assert(prof.ok&&shopSim.players[0].gold===320,'perfil da loja deve sincronizar ouro gasto');
+assert.equal(shopSim.players[0].entity.maxHp,140);
+assert.equal(shopSim.players[0].entity.doubleShot,true);
+shopSim.firePlayer(shopSim.players[0]);
+assert.equal(shopSim.shots.length,2,'tiro duplo comprado deve existir na simulação autoritativa');
+shopSim.setShopReady(0,true);shopSim.setShopReady(1,true);const readyFinal=shopSim.setShopReady(2,true);
+assert(readyFinal.continued,'todos prontos devem fechar o estaleiro');
+assert.equal(shopSim.wave,6);
+assert.equal(shopSim.state,'play');
 
 const fireSim=new AuthoritativeSimulation(players,{random:()=>0.37});run(fireSim,4.5);
 fireSim.firePlayer(fireSim.players[0]);
@@ -85,7 +108,7 @@ assert(JSON.stringify(sim.snapshot(false)).length<25000,'snapshot deve permanece
 
 console.log(JSON.stringify({
   ok:true,
-  tests:27,
+  tests:39,
   ticks:sim.metrics.ticks,
   wave:sim.wave,
   players:sim.players.map(p=>({id:p.id,connected:p.connected,hp:p.entity.hp})),
