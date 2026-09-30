@@ -60,6 +60,7 @@ class AuthoritativeSimulation {
     this.waveRemainingToSpawn=3; this.waveTotal=3; this.waveCompleteTimer=-1;
     this.players=playerMetas.map((m,i)=>makePlayer(m,i,playerMetas.length));
     this.enemies=[]; this.shots=[]; this.enemyShots=[]; this.chests=[]; this.bossFight=null; this.bossClearTimer=-1;
+    this.shop={open:false,revision:0,wave:0};
     this.paused=false; this.acc=0; this.rng=opts.random||Math.random; this.lastEvent=null;
     this.metrics={ticks:0,shots:0,enemyShots:0,corrections:0};
   }
@@ -67,6 +68,7 @@ class AuthoritativeSimulation {
   setConnected(slot,connected){
     const p=this.players[Number(slot)]; if(!p)return false;
     p.connected=!!connected; if(!connected){p.input=safeInput();p.entity.vx=0;p.entity.vy=0;}
+    if(this.state==='upgrade'&&this.shop?.open)this.continueShopIfReady();
     return true;
   }
   setInput(slot,raw,seq=0){
@@ -83,7 +85,7 @@ class AuthoritativeSimulation {
   }
   tick(dt){
     this.metrics.ticks++;
-    if(this.paused||this.state==='gameover')return;
+    if(this.paused||this.state==='gameover'||this.state==='upgrade')return;
     if(this.state==='transition'){
       this.transition+=dt; if(this.transition>=4.25){this.transition=4.25;this.state='play';}
       return;
@@ -108,9 +110,14 @@ class AuthoritativeSimulation {
     }
   }
   firePlayer(p){
-    const e=p.entity,a=p.aim,c=Math.cos(a),s=Math.sin(a);
-    const shot={__netId:id('ps_',this),team:'player',ownerId:p.id,x:e.x+c*36,y:e.y+s*36+28,prevX:e.x,prevY:e.y+28,vx:c*PLAYER_SHOT_SPEED,vy:s*PLAYER_SHOT_SPEED,life:1.8,damage:PLAYER_DAMAGE*(e.damageMult||1),radius:8,hitIds:[],cosmeticProjectile:this.cosmeticFor(p.skinId)};
-    this.shots.push(shot); e.shot=PLAYER_FIRE_CD/Math.max(.35,e.fireRateMult||1); this.metrics.shots++;
+    const e=p.entity,a=p.aim,cosmetic=this.cosmeticFor(p.skinId),count=e.doubleShot?2:1;
+    for(let i=0;i<count;i++){
+      const side=count===2?(i===0?-1:1):0,off=side*8,c=Math.cos(a),si=Math.sin(a),px=-si,py=c;
+      const x=e.x+c*36+px*off,y=e.y+si*36+28+py*off;
+      const shot={__netId:id('ps_',this),team:'player',ownerId:p.id,x,y,prevX:x,prevY:y,vx:c*PLAYER_SHOT_SPEED,vy:si*PLAYER_SHOT_SPEED,life:1.8,damage:PLAYER_DAMAGE*(e.damageMult||1),radius:8,hitIds:[],cosmeticProjectile:cosmetic,flame:!!e.flame,explosive:!!e.explosive,piercing:!!e.piercing};
+      this.shots.push(shot);this.metrics.shots++;
+    }
+    e.shot=PLAYER_FIRE_CD/Math.max(.35,e.fireRateMult||1);
   }
   cosmeticFor(skin){return skin==='gullit'?'gullit':skin==='midas'?'gold':skin==='rei-dos-mares'?'king':null;}
 
@@ -197,7 +204,7 @@ class AuthoritativeSimulation {
     this.enemies=this.enemies.filter(e=>!e.destroyed||e.sinking<(e.isBoss?BOSS_SINK_DURATION:ENEMY_SINK_DURATION));
   }
   damagePlayer(p,amount){
-    const e=p.entity;if(!p.alive||e.inv>0)return;e.hp=Math.max(0,e.hp-amount);e.inv=.42;p.stats.damageTaken+=amount;
+    const e=p.entity;if(!p.alive||e.inv>0)return;const dealt=Math.max(0,amount*(Number(e.incomingDamageMult)||1));e.hp=Math.max(0,e.hp-dealt);e.inv=.42;p.stats.damageTaken+=dealt;
     if(e.hp<=0){p.alive=false;p.stats.deaths++;e.vx=e.vy=0;if(!this.players.some(q=>q.connected&&q.alive))this.state='gameover';}
   }
   destroyEnemy(e,owner){
@@ -212,7 +219,7 @@ class AuthoritativeSimulation {
     if(this.bossFight){
       if(this.bossFight.defeated){
         this.bossClearTimer-=dt;
-        if(this.bossClearTimer<=0){this.bossClearTimer=-1;this.bossFight=null;this.nextWave();}
+        if(this.bossClearTimer<=0){this.bossClearTimer=-1;this.bossFight=null;this.completeWave();}
         return;
       }
       if(!living.length){this.bossFight=null;this.nextWave();}return;
@@ -221,8 +228,62 @@ class AuthoritativeSimulation {
       this.waveSpawnClock-=dt;if(this.waveSpawnClock<=0){this.spawnEnemy();this.waveRemainingToSpawn--;this.waveSpawnClock=Math.max(.32,.92-this.wave*.012);}
     }else if(!living.length){
       if(this.waveCompleteTimer<0)this.waveCompleteTimer=1.5;
-      else{this.waveCompleteTimer-=dt;if(this.waveCompleteTimer<=0)this.nextWave();}
+      else{this.waveCompleteTimer-=dt;if(this.waveCompleteTimer<=0)this.completeWave();}
     }
+  }
+  completeWave(){
+    if(this.wave>0&&this.wave%5===0){this.openShop();return;}
+    this.nextWave();
+  }
+  openShop(){
+    if(this.shop?.open&&this.state==='upgrade')return false;
+    this.state='upgrade';
+    this.shop={open:true,revision:(Number(this.shop?.revision)||0)+1,wave:this.wave};
+    this.shots=[];this.enemyShots=[];
+    for(const p of this.players){if(p.connected&&!p.expired)p.ready=false;}
+    return true;
+  }
+  applyShopProfile(slot,raw={}){
+    if(this.state!=='upgrade'||!this.shop?.open)return {ok:false,error:'O estaleiro não está aberto.'};
+    const p=this.players[Number(slot)];if(!p||!p.connected)return {ok:false,error:'Capitão indisponível.'};
+    const e=p.entity||{};
+    const num=(v,f)=>Number.isFinite(Number(v))?Number(v):f;
+    // Ouro só pode diminuir no cliente durante compras/serviços; nunca aceitamos aumento vindo do navegador.
+    p.gold=clamp(num(raw.gold,p.gold),0,Math.max(0,Number(p.gold)||0));
+    const maxHp=clamp(num(raw.maxHp,e.maxHp||100),40,1200);
+    e.maxHp=maxHp;
+    e.hp=clamp(num(raw.hp,e.hp||maxHp),0,maxHp);
+    e.speedMult=clamp(num(raw.speedMult,e.speedMult||1),.45,2.5);
+    e.damageMult=clamp(num(raw.damageMult,e.damageMult||1),.4,6);
+    e.fireRateMult=clamp(num(raw.fireRateMult,e.fireRateMult||1),.3,6);
+    e.incomingDamageMult=clamp(num(raw.incomingDamageMult,e.incomingDamageMult||1),.2,2);
+    e.doubleShot=!!raw.doubleShot;
+    e.flame=!!raw.flame;
+    e.explosive=!!raw.explosive;
+    e.piercing=!!raw.piercing;
+    p.shopClassPath=String(raw.classPath||p.shopClassPath||'').replace(/[^a-z0-9-]/gi,'').slice(0,32)||null;
+    return {ok:true,gold:p.gold,classPath:p.shopClassPath};
+  }
+  continueShopIfReady(){
+    if(this.state!=='upgrade'||!this.shop?.open)return false;
+    const participants=this.players.filter(q=>q.connected);
+    if(!participants.length||!participants.every(q=>q.ready))return false;
+    for(const q of participants)q.ready=false;
+    this.shop.open=false;this.state='play';this.nextWave();return true;
+  }
+  setShopReady(slot,ready){
+    if(this.state!=='upgrade'||!this.shop?.open)return {ok:false,error:'O estaleiro não está aberto.'};
+    const p=this.players[Number(slot)];if(!p||!p.connected)return {ok:false,error:'Capitão indisponível.'};
+    p.ready=!!ready;
+    return {ok:true,continued:this.continueShopIfReady()};
+  }
+  shopSnapshot(){
+    return {
+      open:!!this.shop?.open,
+      revision:Number(this.shop?.revision)||0,
+      wave:Number(this.shop?.wave)||this.wave,
+      ready:Object.fromEntries(this.players.map(p=>[p.id,!!p.ready]))
+    };
   }
   nextWave(){
     this.wave++;this.waveTimer=0;this.waveCompleteTimer=-1;this.bossFight=null;this.bossClearTimer=-1;
@@ -233,11 +294,11 @@ class AuthoritativeSimulation {
   }
 
   playerSnapshot(p){
-    return {id:p.id,name:p.name,skinId:p.skinId,gold:p.gold,alive:p.alive,connected:p.connected,ready:p.ready,portrait:p.portrait,title:p.title,aim:p.aim,entity:{...p.entity},stats:{...p.stats},lastProcessedInput:p.lastInputSeq};
+    return {id:p.id,name:p.name,skinId:p.skinId,gold:p.gold,alive:p.alive,connected:p.connected,ready:p.ready,portrait:p.portrait,title:p.title,aim:p.aim,shopClassPath:p.shopClassPath||null,entity:{...p.entity},stats:{...p.stats},lastProcessedInput:p.lastInputSeq};
   }
   motionList(list){return list.map(x=>({...x,hitIds:undefined}));}
   snapshot(full=false){
-    const snap={v:2,lite:!full,authoritativeV4:true,seq:++this.seq,serverTime:Date.now(),state:this.state,wave:this.wave,score:this.score,elapsed:this.elapsed,transition:this.transition,waveRemainingToSpawn:this.waveRemainingToSpawn,waveTotal:this.waveTotal,waveSpawnClock:this.waveSpawnClock,players:this.players.map(p=>this.playerSnapshot(p)),enemies:this.motionList(this.enemies),shots:this.motionList(this.shots),enemyShots:this.motionList(this.enemyShots),chests:this.motionList(this.chests),bossFight:this.bossFight?JSON.parse(JSON.stringify(this.bossFight)):null,voyage:{hazards:[],weather:null,event:null}};
+    const snap={v:2,lite:!full,authoritativeV4:true,seq:++this.seq,serverTime:Date.now(),state:this.state,wave:this.wave,score:this.score,elapsed:this.elapsed,transition:this.transition,waveRemainingToSpawn:this.waveRemainingToSpawn,waveTotal:this.waveTotal,waveSpawnClock:this.waveSpawnClock,players:this.players.map(p=>this.playerSnapshot(p)),enemies:this.motionList(this.enemies),shots:this.motionList(this.shots),enemyShots:this.motionList(this.enemyShots),chests:this.motionList(this.chests),bossFight:this.bossFight?JSON.parse(JSON.stringify(this.bossFight)):null,shop:this.shopSnapshot(),voyage:{hazards:[],weather:null,event:null}};
     if(full){snap.lite=false;snap.serverMetrics={...this.metrics};}
     return snap;
   }

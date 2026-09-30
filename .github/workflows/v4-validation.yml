@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - v4.2-death-restart-polish
     paths:
       - 'server.js'
       - 'simulation-v4.js'
@@ -30,8 +29,23 @@ jobs:
       - run: npm test
       - name: Install network test client
         run: npm install --no-save socket.io-client@4.8.4
-      - name: Three-client network pause resume restart test
+      - name: Three-client network pause resume restart shop test
         run: node test-network-v41.js
+      - name: Boot server and check local health
+        shell: bash
+        run: |
+          PORT=3456 FRONTEND_ORIGINS=https://pandapidio.github.io node server.js > /tmp/rdm-v42.log 2>&1 &
+          PID=$!
+          trap 'kill $PID || true; cat /tmp/rdm-v42.log' EXIT
+          for i in {1..24}; do
+            if curl -fsS http://127.0.0.1:3456/health > /tmp/health.json; then break; fi
+            sleep 0.25
+          done
+          cat /tmp/health.json
+          node -e "const h=require('/tmp/health.json'); if(!h.ok||h.protocol!=='rdm-v4'||h.authoritative!==true||h.simulationHz!==60||h.snapshotHz!==30) process.exit(1)"
+          kill $PID
+          wait $PID || true
+          trap - EXIT
       - name: Wait for Railway V4.2 and smoke public WebSocket
         shell: bash
         run: |
@@ -39,7 +53,7 @@ jobs:
           READY=0
           for i in {1..60}; do
             if curl -fsS "$URL/health" > /tmp/public-health.json; then
-              if node -e "const h=require('/tmp/public-health.json'); process.exit(h.version==='4.2.0-authoritative-beta'&&h.protocol==='rdm-v4'&&h.authoritative===true?0:1)"; then
+              if node -e "const h=require('/tmp/public-health.json'); process.exit(h.version==='4.2.0-authoritative-polish'&&h.protocol==='rdm-v4'&&h.authoritative===true?0:1)"; then
                 READY=1
                 break
               fi
@@ -55,23 +69,8 @@ jobs:
           const timer=setTimeout(()=>{console.error('public websocket timeout');s.disconnect();process.exit(1)},10000);
           s.on('server:hello',h=>{
             console.log(JSON.stringify({transport:s.io.engine.transport.name,hello:h}));
-            if(h?.version!=='4.2.0-authoritative-beta'||h?.protocol!=='rdm-v4'||!h?.authoritative||s.io.engine.transport.name!=='websocket')process.exitCode=1;
+            if(h?.version!=='4.2.0-authoritative-polish'||h?.protocol!=='rdm-v4'||!h?.authoritative||s.io.engine.transport.name!=='websocket')process.exitCode=1;
             clearTimeout(timer);s.disconnect();
           });
           s.on('connect_error',e=>{console.error(e.message);clearTimeout(timer);process.exit(1)});
           NODE
-      - name: Boot server and check health
-        shell: bash
-        run: |
-          PORT=3456 FRONTEND_ORIGINS=https://pandapidio.github.io node server.js > /tmp/rdm-v41.log 2>&1 &
-          PID=$!
-          trap 'kill $PID || true; cat /tmp/rdm-v41.log' EXIT
-          for i in {1..24}; do
-            if curl -fsS http://127.0.0.1:3456/health > /tmp/health.json; then break; fi
-            sleep 0.25
-          done
-          cat /tmp/health.json
-          node -e "const h=require('/tmp/health.json'); if(!h.ok||h.protocol!=='rdm-v4'||h.authoritative!==true||h.simulationHz!==60||h.snapshotHz!==30) process.exit(1)"
-          kill $PID
-          wait $PID || true
-          trap - EXIT
