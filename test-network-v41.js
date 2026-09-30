@@ -102,6 +102,25 @@ async function main(){
     const rrb=await ack(c1b,'room:resume',{code,resumeToken:t1});
     assert(rrb.ok&&rrb.snapshot?.authoritativeV4,'leader must resume without host migration');
 
+    // Onda 5 precisa abrir o estaleiro para todos, sem pular para a 6.
+    const shopEvents=Promise.all([
+      waitEvent(c1b,'game:snapshot',x=>x?.state==='upgrade'&&x?.shop?.open,3500),
+      waitEvent(c2b,'game:snapshot',x=>x?.state==='upgrade'&&x?.shop?.open,3500),
+      waitEvent(c3,'game:snapshot',x=>x?.state==='upgrade'&&x?.shop?.open,3500)
+    ]);
+    const forcedShop=await ack(c3,'test:force-wave-complete',{wave:5});assert(forcedShop.ok);
+    const shopSnaps=await shopEvents;
+    assert(shopSnaps.every(x=>x.wave===5),'todos os clientes devem parar na onda 5 para o estaleiro');
+
+    const shopProfile=await ack(c2b,'game:shop-profile',{profile:{gold:0,maxHp:130,hp:120,speedMult:1.1,damageMult:1.2,fireRateMult:1.15,doubleShot:true,classPath:'marine'}});
+    assert(shopProfile.ok,'perfil da loja deve sincronizar');
+    const wave6=waitEvent(c3,'game:snapshot',x=>x?.state==='play'&&x?.wave===6,3500);
+    const ready1=await ack(c1b,'game:shop-ready',{ready:true,profile:{gold:0}});
+    const ready2=await ack(c2b,'game:shop-ready',{ready:true,profile:{gold:0,maxHp:130,hp:120,speedMult:1.1,damageMult:1.2,fireRateMult:1.15,doubleShot:true,classPath:'marine'}});
+    const ready3=await ack(c3,'game:shop-ready',{ready:true,profile:{gold:0}});
+    assert(ready1.ok&&ready2.ok&&ready3.ok&&ready3.continued,'último jogador pronto deve iniciar a onda 6');
+    await wave6;
+
     const beforeRestart=rrb.room.restartRevision||0;
     const forced=await ack(c3,'test:force-gameover',{});
     assert(forced.ok,'test must force authoritative game over');
@@ -123,7 +142,7 @@ async function main(){
       assert((ev.restartRevision||0)>beforeRestart,'restart revision must increase');
     }
 
-    const dbg={ok:true,snapshots:count,pausedRevision:ur.revision,p2ResumeSeq:ackSeq,p3Movement:Math.round(p3After-p3Before),restartRevision:restartAck.restartRevision,room:code};
+    const dbg={ok:true,snapshots:count,pausedRevision:ur.revision,p2ResumeSeq:ackSeq,p3Movement:Math.round(p3After-p3Before),restartRevision:restartAck.restartRevision,shopWave:shopSnaps[0].wave,room:code};
     console.log(JSON.stringify(dbg,null,2));
   }finally{
     for(const s of sockets)try{s.disconnect();}catch(_){}
