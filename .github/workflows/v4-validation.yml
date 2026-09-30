@@ -32,6 +32,34 @@ jobs:
         run: npm install --no-save socket.io-client@4.8.4
       - name: Three-client network pause resume restart test
         run: node test-network-v41.js
+      - name: Wait for Railway V4.2 and smoke public WebSocket
+        shell: bash
+        run: |
+          URL='https://rei-dos-mares-server-production.up.railway.app'
+          READY=0
+          for i in {1..60}; do
+            if curl -fsS "$URL/health" > /tmp/public-health.json; then
+              if node -e "const h=require('/tmp/public-health.json'); process.exit(h.version==='4.2.0-authoritative-beta'&&h.protocol==='rdm-v4'&&h.authoritative===true?0:1)"; then
+                READY=1
+                break
+              fi
+            fi
+            sleep 2
+          done
+          cat /tmp/public-health.json || true
+          test "$READY" = 1
+          node - <<'NODE'
+          const {io}=require('socket.io-client');
+          const url='https://rei-dos-mares-server-production.up.railway.app';
+          const s=io(url,{transports:['websocket'],reconnection:false,timeout:8000,extraHeaders:{Origin:'https://pandapidio.github.io'}});
+          const timer=setTimeout(()=>{console.error('public websocket timeout');s.disconnect();process.exit(1)},10000);
+          s.on('server:hello',h=>{
+            console.log(JSON.stringify({transport:s.io.engine.transport.name,hello:h}));
+            if(h?.version!=='4.2.0-authoritative-beta'||h?.protocol!=='rdm-v4'||!h?.authoritative||s.io.engine.transport.name!=='websocket')process.exitCode=1;
+            clearTimeout(timer);s.disconnect();
+          });
+          s.on('connect_error',e=>{console.error(e.message);clearTimeout(timer);process.exit(1)});
+          NODE
       - name: Boot server and check health
         shell: bash
         run: |
