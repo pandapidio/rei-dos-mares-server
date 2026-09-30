@@ -68,6 +68,7 @@ class AuthoritativeSimulation {
   setConnected(slot,connected){
     const p=this.players[Number(slot)]; if(!p)return false;
     p.connected=!!connected; if(!connected){p.input=safeInput();p.entity.vx=0;p.entity.vy=0;}
+    if(this.state==='upgrade'&&this.shop?.open)this.continueShopIfReady();
     return true;
   }
   setInput(slot,raw,seq=0){
@@ -263,19 +264,18 @@ class AuthoritativeSimulation {
     p.shopClassPath=String(raw.classPath||p.shopClassPath||'').replace(/[^a-z0-9-]/gi,'').slice(0,32)||null;
     return {ok:true,gold:p.gold,classPath:p.shopClassPath};
   }
+  continueShopIfReady(){
+    if(this.state!=='upgrade'||!this.shop?.open)return false;
+    const participants=this.players.filter(q=>q.connected);
+    if(!participants.length||!participants.every(q=>q.ready))return false;
+    for(const q of participants)q.ready=false;
+    this.shop.open=false;this.state='play';this.nextWave();return true;
+  }
   setShopReady(slot,ready){
     if(this.state!=='upgrade'||!this.shop?.open)return {ok:false,error:'O estaleiro não está aberto.'};
     const p=this.players[Number(slot)];if(!p||!p.connected)return {ok:false,error:'Capitão indisponível.'};
     p.ready=!!ready;
-    const participants=this.players.filter(q=>q.connected&&!q.expired);
-    if(participants.length&&participants.every(q=>q.ready)){
-      for(const q of participants)q.ready=false;
-      this.shop.open=false;
-      this.state='play';
-      this.nextWave();
-      return {ok:true,continued:true};
-    }
-    return {ok:true,continued:false};
+    return {ok:true,continued:this.continueShopIfReady()};
   }
   shopSnapshot(){
     return {
