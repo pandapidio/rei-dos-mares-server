@@ -121,28 +121,56 @@ async function main(){
     assert(ready1.ok&&ready2.ok&&ready3.ok&&ready3.continued,'último jogador pronto deve iniciar a onda 6');
     await wave6;
 
-    const beforeRestart=rrb.room.restartRevision||0;
-    const forced=await ack(c3,'test:force-gameover',{});
-    assert(forced.ok,'test must force authoritative game over');
-    const over=await waitEvent(c3,'game:snapshot',x=>x?.state==='gameover',2500);
-    assert.equal(over.state,'gameover');
-
-    const restartEvents=Promise.all([
-      waitEvent(c1b,'game:restart',x=>x?.snapshot?.wave===1,3000),
-      waitEvent(c2b,'game:restart',x=>x?.snapshot?.wave===1,3000),
-      waitEvent(c3,'game:restart',x=>x?.snapshot?.wave===1,3000)
-    ]);
-    const restartAck=await ack(c2b,'game:restart-request',{});
-    assert(restartAck.ok,'any connected player can restart the room');
-    const restarted=await restartEvents;
-    for(const ev of restarted){
-      assert.equal(ev.snapshot.wave,1);
-      assert.equal(ev.snapshot.state,'transition');
-      assert(ev.snapshot.players.filter(p=>p.connected).every(p=>p.alive),'all connected players must restart alive');
-      assert((ev.restartRevision||0)>beforeRestart,'restart revision must increase');
+    const activeSockets=[c1b,c2b,c3];
+    const ids=rrb.room.players.map(p=>p.playerId);
+    const earlyLobby=await ack(c2b,'room:return-lobby',{});
+    assert(!earlyLobby.ok,'não é possível encerrar a viagem em andamento pelo retorno da derrota');
+    const forced=await ack(c3,'test:force-gameover',{});assert(forced.ok);
+    await waitEvent(c3,'game:snapshot',x=>x?.state==='gameover',2500);
+    const oldRestart=await ack(c2b,'game:restart-request',{});
+    assert(!oldRestart.ok,'recomeço direto na derrota deve estar removido');
+    const lobbyEvents=Promise.all(activeSockets.map(s=>waitEvent(s,'game:lobby',x=>x?.room?.code===code)));
+    const lobbyAck=await ack(c2b,'room:return-lobby',{});assert(lobbyAck.ok);
+    const lobbies=await lobbyEvents;
+    for(const ev of lobbies){
+      assert.equal(ev.room.started,false);
+      assert.equal(ev.room.code,code,'código da party deve continuar igual');
+      assert.deepEqual(ev.room.players.map(p=>p.playerId),ids,'todos devem manter a identidade na party');
+      assert(ev.room.players.every(p=>p.connected));
     }
-
-    const dbg={ok:true,snapshots:count,pausedRevision:ur.revision,p2ResumeSeq:ackSeq,p3Movement:Math.round(p3After-p3Before),restartRevision:restartAck.restartRevision,shopWave:shopSnaps[0].wave,room:code};
+    const duplicateReturn=await ack(c3,'room:return-lobby',{});
+    assert(duplicateReturn.ok,'cliques simultâneos de retorno devem ser idempotentes');
+    const streamsBefore=[...count];await sleep(150);
+    assert(count.every((n,i)=>n===streamsBefore[i]),'a partida antiga deve parar de enviar snapshots');
+    const leaderId=lobbyAck.room.lobbyLeaderPlayerId;
+    const leaderSocket=activeSockets[lobbyAck.room.players.findIndex(p=>p.playerId===leaderId)];
+    const starts=Promise.all(activeSockets.map(s=>waitEvent(s,'game:start',x=>x?.code===code)));
+    assert((await ack(leaderSocket,'room:start',{})).ok);await starts;
+    const fresh=await waitEvent(c3,'game:snapshot',x=>x?.wave===1&&x.state==='transition');
+    assert(fresh.players.every(p=>p.alive&&p.gold===0&&p.entity.hp===100&&p.lastProcessedInput===0),'nova viagem deve começar com estado limpo');
+    assert(!fresh.shop.open&&fresh.enemies.length===0&&fresh.shots.length===0);
+    // A mesma party precisa conseguir jogar, abrir a loja e voltar ao menu várias vezes.
+    for(let cycle=0;cycle<2;cycle++){
+      const shops=Promise.all(activeSockets.map(s=>waitEvent(s,'game:snapshot',x=>x?.state==='upgrade'&&x?.shop?.open)));
+      await ack(c3,'test:force-wave-complete',{wave:5});await shops;
+      for(const [i,s] of activeSockets.entries())assert((await ack(s,'game:shop-ready',{ready:true,profile:{gold:0,classPath:['marine','pirate','undead'][i]}})).ok);
+      const overEvent=waitEvent(c3,'game:snapshot',x=>x?.state==='gameover');
+      await ack(c3,'test:force-gameover',{});await overEvent;
+      const lobbyEvent=waitEvent(c3,'game:lobby');
+      assert((await ack(c2b,'room:return-lobby',{})).ok);await lobbyEvent;
+      const startEvent=waitEvent(c3,'game:start');
+      assert((await ack(leaderSocket,'room:start',{})).ok);await startEvent;
+    }
+    const finalOver=waitEvent(c3,'game:snapshot',x=>x?.state==='gameover');
+    await ack(c3,'test:force-gameover',{});await finalOver;
+    const offlineEvent=waitEvent(c3,'game:player-left',x=>x?.slot===0);
+    c1b.disconnect();await offlineEvent;
+    const returnWithOffline=await ack(c2b,'room:return-lobby',{});assert(returnWithOffline.ok);
+    const c1c=await connect();sockets.push(c1c);
+    const resumeLobby=await ack(c1c,'room:resume',{code,resumeToken:t1});
+    assert(resumeLobby.ok&&!resumeLobby.room.started&&resumeLobby.snapshot===null,'capitão desconectado também deve retomar a mesma party no menu');
+    assert.equal(resumeLobby.playerId,r1.playerId);
+    const dbg={ok:true,snapshots:count,pausedRevision:ur.revision,p2ResumeSeq:ackSeq,p3Movement:Math.round(p3After-p3Before),partyPreserved:true,newRunClean:true,shopWave:shopSnaps[0].wave,room:code};
     console.log(JSON.stringify(dbg,null,2));
   }finally{
     for(const s of sockets)try{s.disconnect();}catch(_){}

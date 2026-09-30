@@ -106,6 +106,23 @@ assert(Math.abs(speed-600)<.01,'velocidade autoritativa do tiro deve ser 600 com
 assert(Math.abs(fireSim.players[0].entity.shot-.70)<.001,'cooldown autoritativo deve coincidir com o cliente base');
 assert(JSON.stringify(sim.snapshot(false)).length<25000,'snapshot deve permanecer compacto');
 
+// Paridade de resistência e dano, com 1, 2 e 3 capitães.
+for(const wave of [1,5,10,11,12,25,50,75,100]){
+  const sims=[1,2,3].map(count=>new AuthoritativeSimulation(players.slice(0,count),{random:()=>.99}));
+  for(const sim of sims){
+    sim.wave=wave;sim.spawnEnemy();
+    const e=sim.enemies[0],d=require('./simulation-v4').difficulty(wave);
+    assert.equal(e.max,1+d.hp+(wave>50?d.endlessHp:0));
+    sim.players[0].aim=0;sim.firePlayer(sim.players[0]);
+    const shot=sim.shots[0];assert.equal(shot.damage,1);
+    shot.x=e.x;shot.y=e.y;sim.resolveCollisions();
+    assert.equal(e.destroyed,wave<12,'básicos iniciais devem morrer com um tiro');
+    sim.fireEnemy(e,sim.players[0]);
+    assert.equal(sim.enemyShots[0].damage,d.damage);
+    assert.equal(Math.round(Math.hypot(sim.enemyShots[0].vx,sim.enemyShots[0].vy)),Math.round(d.bullet));
+  }
+  assert(sims.every(sim=>sim.enemies[0].max===sims[0].enemies[0].max),'quantidade de capitães não pode aumentar vida');
+}
 console.log(JSON.stringify({
   ok:true,
   tests:39,
