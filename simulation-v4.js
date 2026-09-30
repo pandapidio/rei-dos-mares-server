@@ -6,7 +6,8 @@ const FIXED_DT = 1 / 60;
 const PLAYER_SPEED = 360;
 const PLAYER_FIRE_CD = 0.70;
 const PLAYER_SHOT_SPEED = 600;
-const PLAYER_DAMAGE = 34;
+// Mesmas unidades do singleplayer: tiro base = 1, navio básico = 1 HP.
+const PLAYER_DAMAGE = 1;
 const PLAYER_RADIUS = 28;
 const ENEMY_RADIUS = 34;
 const ENEMY_SINK_DURATION = 1.65;
@@ -31,6 +32,16 @@ function projectileHitsEnemy(s,e){
   return hull||body;
 }
 function id(prefix, state){ state.netId=(state.netId||1)+1; return prefix + state.netId; }
+
+// Espelha difficulty() em encounters.js, sem multiplicador pelo tamanho do grupo.
+function difficulty(n){
+  const growth=Math.max(0,n-8),endless=Math.max(0,n-50);
+  const budget=n<6?n+2:n<=15?Math.round(n*1.35+2):Math.min(88,Math.round(n*1.48+2));
+  return {damage:n<=5?10:Math.min(20,12+Math.floor(growth/10)),speed:Math.min(50,growth*.98),
+    bullet:Math.min(380,270+growth*1.72),rate:Math.max(.62,1-growth*.0075),
+    hp:n<12?0:Math.min(3.1,(n-8)*.042),endlessHp:Math.min(4.2,Math.log2(1+endless/14)),
+    budget,maxAlive:n<10?17:n<30?23:29};
+}
 
 function spawnPoint(slot,count){
   const xs=count===2?[W*.38,W*.62]:[W*.30,W*.50,W*.70];
@@ -124,19 +135,19 @@ class AuthoritativeSimulation {
   spawnEnemy(){
     const edge=Math.floor(this.rng()*3),along=.18+this.rng()*.64;
     let x,y;if(edge===0){x=-75;y=120+along*(H-210);}else if(edge===1){x=W+75;y=120+along*(H-210);}else{x=120+along*(W-240);y=-75;}
-    const heavy=this.wave>=9&&this.rng()<Math.min(.32,this.wave*.012);
-    const max=Math.round((heavy?125:72)*(1+(this.wave-1)*.075));
-    this.enemies.push({__netId:id('e_',this),x,y,prevX:x,prevY:y,vx:0,vy:0,r:heavy?42:ENEMY_RADIUS,hp:max,max,type:heavy?'heavy':'basic',role:'basic',variant:heavy?'white2':'white',phase:this.rng()*Math.PI*2,sinking:0,cannonAngle:Math.PI/2,shot:.7+this.rng()*1.2,destroyed:false});
+    const heavy=this.wave>=10&&this.rng()<Math.min(.32,this.wave*.012),d=difficulty(this.wave);
+    const max=(heavy?4:1)+d.hp*(heavy?1.65:1)+(this.wave>50?d.endlessHp:0);
+    this.enemies.push({__netId:id('e_',this),x,y,prevX:x,prevY:y,vx:0,vy:0,r:heavy?42:ENEMY_RADIUS,hp:max,max,type:heavy?'heavy':'basic',role:'basic',variant:heavy?'white2':'white',phase:this.rng()*Math.PI*2,sinking:0,cannonAngle:Math.PI/2,shot:1.3+this.rng()*1.4,destroyed:false});
   }
   startBoss(){
-    const max=Math.round(1500*(1+(this.wave-15)*.04));
+    const max=62; // admiralConfig('marine').hp no singleplayer.
     const introMax=3.35,startY=-215,targetY=165;
     const e={__netId:id('boss_',this),x:W*.5,y:startY,prevX:W*.5,prevY:startY,vx:0,vy:0,r:92,hp:max,max,type:'boss',role:'flagship',variant:'boss',isBoss:true,bossKind:'marine',phase:0,sinking:0,cannonAngle:Math.PI/2,shot:1.25,destroyed:false,
       bossHullY:66,bossHullRx:112,bossHullRy:53,bossBodyY:18,bossBodyRx:78,bossBodyRy:102};
     this.enemies=[e];this.enemyShots=[];
     this.bossFight={kind:'marine',defeated:false,intro:introMax,introMax,entryProgress:0,entryStartY:startY,entryTargetY:targetY,
       stage:1,phase:0,phaseBarrier:0,attack:null,endless:false,silence:0,
-      cfg:{name:'ALMIRANTE DA MARINHA',hp:max,damage:17,speed:54,gold:220}};
+      cfg:{name:'ALMIRANTE DA MARINHA',hp:max,damage:16,speed:48,gold:260}};
   }
   targetFor(enemy){
     let best=null,bd=Infinity;for(const p of this.players){if(!p.connected||!p.alive)continue;const d=dist2(enemy,p.entity);if(d<bd){bd=d;best=p;}}return best;
@@ -161,19 +172,19 @@ class AuthoritativeSimulation {
         continue;
       }
       const te=target.entity,a=Math.atan2(te.y-e.y,te.x-e.x);e.cannonAngle=a;e.shot-=dt;
-      const sp=e.isBoss?54:(e.type==='heavy'?45:62)+Math.min(22,this.wave*.8);
+      const dcfg=difficulty(this.wave),sp=e.isBoss?48:(e.type==='heavy'?31:62)+dcfg.speed;
       e.vx+=(Math.cos(a)*sp-e.vx)*Math.min(1,dt*1.35);e.vy+=(Math.sin(a)*sp-e.vy)*Math.min(1,dt*1.35);
       e.x+=e.vx*dt;e.y+=e.vy*dt;
       const tx=e.isBoss?e.x: e.x,ty=e.isBoss?e.y+62:e.y;
       const d=Math.hypot(te.x-tx,te.y-ty);
-      if(e.shot<=0&&d<760){this.fireEnemy(e,target);e.shot=e.isBoss?.72+this.rng()*.35:Math.max(1.25,2.65-this.wave*.025)+this.rng()*.55;}
+      if(e.shot<=0&&d<760){this.fireEnemy(e,target);e.shot=e.isBoss?.72+this.rng()*.35:(e.type==='heavy'?3.8:3.45)*dcfg.rate+this.rng()*.45;}
       const contactR=e.isBoss?82:(e.r||34)+PLAYER_RADIUS*.72;
-      if(d<contactR)this.damagePlayer(target,e.isBoss?20:11);
+      if(d<contactR)this.damagePlayer(target,e.isBoss?16:dcfg.damage);
     }
   }
   fireEnemy(e,target){
-    const a=Math.atan2(target.entity.y-e.y,target.entity.x-e.x),speed=e.isBoss?385:315,c=Math.cos(a),s=Math.sin(a);
-    this.enemyShots.push({__netId:id('es_',this),team:'enemy',x:e.x+c*34,y:e.y+s*34,prevX:e.x,prevY:e.y,vx:c*speed,vy:s*speed,life:2.7,damage:e.isBoss?17:12,radius:e.isBoss?9:7,boss:!!e.isBoss,bossKind:e.bossKind||null});
+    const d=difficulty(this.wave),a=Math.atan2(target.entity.y-e.y,target.entity.x-e.x),speed=e.isBoss?385:d.bullet*(e.type==='heavy'?.83:1),c=Math.cos(a),s=Math.sin(a);
+    this.enemyShots.push({__netId:id('es_',this),team:'enemy',x:e.x+c*34,y:e.y+s*34,prevX:e.x,prevY:e.y,vx:c*speed,vy:s*speed,life:2.7,damage:e.isBoss?16:d.damage+(e.type==='heavy'?2:0),radius:e.isBoss?9:7,boss:!!e.isBoss,bossKind:e.bossKind||null});
     this.metrics.enemyShots++;
   }
   updateProjectiles(dt){
@@ -225,7 +236,7 @@ class AuthoritativeSimulation {
       if(!living.length){this.bossFight=null;this.nextWave();}return;
     }
     if(this.waveRemainingToSpawn>0){
-      this.waveSpawnClock-=dt;if(this.waveSpawnClock<=0){this.spawnEnemy();this.waveRemainingToSpawn--;this.waveSpawnClock=Math.max(.32,.92-this.wave*.012);}
+      this.waveSpawnClock-=dt;if(this.waveSpawnClock<=0&&living.length<difficulty(this.wave).maxAlive){this.spawnEnemy();this.waveRemainingToSpawn--;this.waveSpawnClock=Math.max(.24,.86-Math.min(this.wave,50)*.005);}
     }else if(!living.length){
       if(this.waveCompleteTimer<0)this.waveCompleteTimer=1.5;
       else{this.waveCompleteTimer-=dt;if(this.waveCompleteTimer<=0)this.completeWave();}
@@ -288,7 +299,7 @@ class AuthoritativeSimulation {
   nextWave(){
     this.wave++;this.waveTimer=0;this.waveCompleteTimer=-1;this.bossFight=null;this.bossClearTimer=-1;
     if(this.wave===15){this.waveRemainingToSpawn=0;this.waveTotal=1;this.startBoss();return;}
-    const count=Math.min(18,3+Math.floor(this.wave*1.45));
+    const count=difficulty(this.wave).budget;
     this.waveRemainingToSpawn=count;this.waveTotal=count;this.waveSpawnClock=.8;
     for(const p of this.players){if(p.connected&&p.alive)p.entity.hp=Math.min(p.entity.maxHp,p.entity.hp+4);}
   }
@@ -304,4 +315,4 @@ class AuthoritativeSimulation {
   }
 }
 
-module.exports={AuthoritativeSimulation,W,H,FIXED_DT};
+module.exports={AuthoritativeSimulation,W,H,FIXED_DT,difficulty};
