@@ -44,18 +44,48 @@ assert.equal(snap.players.length,3);
 assert(Number.isFinite(snap.players[1].lastProcessedInput));
 assert(snap.shots.every(s=>s.team==='player'),'snapshot não pode transformar tiro de jogador em tiro inimigo');
 
+// Navio comum destruído deve permanecer tempo suficiente para animação de naufrágio.
+const deathSim=new AuthoritativeSimulation(players,{random:()=>0.37});run(deathSim,4.5);
+deathSim.enemies=[];deathSim.waveRemainingToSpawn=0;
+deathSim.spawnEnemy();const victim=deathSim.enemies[0];victim.hp=1;
+deathSim.shots.push({__netId:'test-kill',team:'player',ownerId:0,x:victim.x,y:victim.y,prevX:victim.x,prevY:victim.y,vx:0,vy:0,life:1,damage:2,radius:8});
+deathSim.resolveCollisions();
+assert(victim.destroyed&&victim.sinking>0,'inimigo destruído deve entrar em sinking');
+assert(deathSim.enemies.includes(victim),'inimigo não pode sumir no mesmo tick da morte');
+run(deathSim,.8);assert(deathSim.enemies.includes(victim),'naufrágio comum deve continuar visível durante a animação');
+run(deathSim,1.1);assert(!deathSim.enemies.includes(victim),'naufrágio comum deve ser removido após a animação');
+
 sim.wave=14;sim.enemies=[];sim.waveRemainingToSpawn=0;sim.nextWave();
 assert.equal(sim.wave,15);
 assert(sim.bossFight&&sim.enemies.some(e=>e.isBoss),'onda 15 deve nascer no servidor');
-const boss=sim.enemies.find(e=>e.isBoss);boss.hp=1;
-sim.shots.push({__netId:'test-boss-shot',team:'player',ownerId:0,x:boss.x,y:boss.y,prevX:boss.x,prevY:boss.y,vx:0,vy:0,life:1,damage:2,radius:8});
-sim.resolveCollisions();run(sim,2.5);
-assert.equal(sim.wave,16,'partida deve avançar após chefe morrer');
+const boss=sim.enemies.find(e=>e.isBoss);
+sim.bossFight.intro=0;boss.y=165;boss.hp=100;
+const hpBeforeSail=boss.hp;
+sim.shots.push({__netId:'sail-miss',team:'player',ownerId:0,x:boss.x,y:boss.y-145,prevX:boss.x,prevY:boss.y-145,vx:0,vy:0,life:1,damage:10,radius:8});
+sim.resolveCollisions();
+assert.equal(boss.hp,hpBeforeSail,'topo da vela não deve ser o centro da hitbox do boss');
+sim.shots.push({__netId:'hull-hit',team:'player',ownerId:0,x:boss.x,y:boss.y+66,prevX:boss.x,prevY:boss.y+66,vx:0,vy:0,life:1,damage:10,radius:8});
+sim.resolveCollisions();
+assert(boss.hp<hpBeforeSail,'casco do boss deve receber tiro');
+
+boss.hp=1;
+sim.shots.push({__netId:'test-boss-shot',team:'player',ownerId:0,x:boss.x,y:boss.y+66,prevX:boss.x,prevY:boss.y+66,vx:0,vy:0,life:1,damage:2,radius:8});
+sim.resolveCollisions();
+assert(boss.destroyed&&boss.sinking>0,'boss derrotado deve afundar em vez de desaparecer');
+run(sim,1.5);assert(sim.enemies.includes(boss),'boss deve continuar visível durante o naufrágio');
+run(sim,1.7);
+assert.equal(sim.wave,16,'partida deve avançar após a animação de morte do chefe');
+
+const fireSim=new AuthoritativeSimulation(players,{random:()=>0.37});run(fireSim,4.5);
+fireSim.firePlayer(fireSim.players[0]);
+const fs=fireSim.shots[0],speed=Math.hypot(fs.vx,fs.vy);
+assert(Math.abs(speed-600)<.01,'velocidade autoritativa do tiro deve ser 600 como no cliente');
+assert(Math.abs(fireSim.players[0].entity.shot-.70)<.001,'cooldown autoritativo deve coincidir com o cliente base');
 assert(JSON.stringify(sim.snapshot(false)).length<25000,'snapshot deve permanecer compacto');
 
 console.log(JSON.stringify({
   ok:true,
-  tests:18,
+  tests:27,
   ticks:sim.metrics.ticks,
   wave:sim.wave,
   players:sim.players.map(p=>({id:p.id,connected:p.connected,hp:p.entity.hp})),
