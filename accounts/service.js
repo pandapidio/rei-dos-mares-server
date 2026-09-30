@@ -41,7 +41,10 @@ async function installAccounts(app,{db,origins,production=true}={}){
  progress JSONB NOT NULL DEFAULT '{}', revision INTEGER NOT NULL DEFAULT 0);
  CREATE TABLE IF NOT EXISTS pg_sessions(token_hash TEXT PRIMARY KEY, account_id UUID NOT NULL REFERENCES pg_accounts(id) ON DELETE CASCADE, expires_at TIMESTAMPTZ NOT NULL);
  CREATE TABLE IF NOT EXISTS pg_save_writes(account_id UUID NOT NULL REFERENCES pg_accounts(id) ON DELETE CASCADE, write_id UUID NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(account_id,write_id));
- CREATE TABLE IF NOT EXISTS pg_feedback(id UUID PRIMARY KEY, account_id UUID NOT NULL REFERENCES pg_accounts(id), subject TEXT NOT NULL, message TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());`;
+ CREATE TABLE IF NOT EXISTS pg_feedback(id UUID PRIMARY KEY, account_id UUID NOT NULL REFERENCES pg_accounts(id), subject TEXT NOT NULL, message TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+ ALTER TABLE pg_accounts ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false;
+ ALTER TABLE pg_feedback ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ CREATE INDEX IF NOT EXISTS pg_feedback_inbox ON pg_feedback(deleted_at,created_at DESC,id);`;
  for(const statement of schema.split(';').filter(x=>x.trim()))await db.query(statement);
  const attempts=new Map();
  // Express trusts one Railway edge hop only when deployed on Railway.
@@ -52,7 +55,7 @@ async function installAccounts(app,{db,origins,production=true}={}){
   let x=attempts.get(ip);if(!x||x.until<now)attempts.set(ip,x={count:0,until:now+60000});
   if(++x.count>60)return res.status(429).json({error:'Muitas tentativas. Aguarde um minuto.'});next();
  });
- const publicUser=a=>({id:a.id,username:a.username,avatar:a.avatar,createdAt:a.created_at});
+ const publicUser=a=>({id:a.id,username:a.username,avatar:a.avatar,createdAt:a.created_at,isAdmin:a.is_admin===true});
  const wrap=fn=>async(req,res,next)=>{try{await fn(req,res,next);}catch(e){next(e);}};
  router.post('/session',wrap(async(req,res)=>{
   const {username,password,progress={}}=req.body;
@@ -109,6 +112,32 @@ async function installAccounts(app,{db,origins,production=true}={}){
   await db.query('INSERT INTO pg_feedback(id,account_id,subject,message) VALUES($1,$2,$3,$4)',[crypto.randomUUID(),req.account.id,subject.trim(),message.trim()]);res.status(201).json({ok:true});
  }));
  router.delete('/session',wrap(async(req,res)=>{await db.query('DELETE FROM pg_sessions WHERE token_hash=$1',[req.tokenHash]);res.json({ok:true});}));
+ // Roles come from the database on every authenticated request, never from the browser.
+ router.use('/admin',(req,res,next)=>req.account.is_admin===true?next():res.status(403).json({error:'Esta página é exclusiva para administradores.'}));
+ const uuid=id=>typeof id==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+ router.get('/admin/feedback',wrap(async(req,res)=>{
+  const offset=Number(req.query.offset||0),trash=req.query.trash==='1';
+  if(!Number.isSafeInteger(offset)||offset<0||offset>1000000)return res.status(400).json({error:'Página inválida.'});
+  const where=trash?'f.deleted_at IS NOT NULL':'f.deleted_at IS NULL';
+  const total=Number((await db.query(`SELECT count(*) FROM pg_feedback f WHERE ${where}`)).rows[0].count);
+  const rows=(await db.query(`SELECT f.id,f.subject,f.created_at,f.deleted_at,a.username FROM pg_feedback f JOIN pg_accounts a ON a.id=f.account_id WHERE ${where} ORDER BY f.created_at DESC,f.id DESC LIMIT 30 OFFSET $1`,[offset])).rows;
+  res.json({items:rows,total,offset,limit:30});
+ }));
+ router.get('/admin/feedback/:id',wrap(async(req,res)=>{
+  if(!uuid(req.params.id))return res.status(400).json({error:'Feedback inválido.'});
+  const item=(await db.query('SELECT f.id,f.subject,f.message,f.created_at,f.deleted_at,a.username FROM pg_feedback f JOIN pg_accounts a ON a.id=f.account_id WHERE f.id=$1',[req.params.id])).rows[0];
+  if(!item)return res.status(404).json({error:'Feedback não encontrado.'});res.json({item});
+ }));
+ router.delete('/admin/feedback/:id',wrap(async(req,res)=>{
+  if(!uuid(req.params.id))return res.status(400).json({error:'Feedback inválido.'});
+  const r=await db.query('UPDATE pg_feedback SET deleted_at=COALESCE(deleted_at,now()) WHERE id=$1 RETURNING id',[req.params.id]);
+  if(!r.rows.length)return res.status(404).json({error:'Feedback não encontrado.'});res.json({ok:true});
+ }));
+ router.post('/admin/feedback/:id/restore',wrap(async(req,res)=>{
+  if(!uuid(req.params.id))return res.status(400).json({error:'Feedback inválido.'});
+  const r=await db.query('UPDATE pg_feedback SET deleted_at=NULL WHERE id=$1 RETURNING id',[req.params.id]);
+  if(!r.rows.length)return res.status(404).json({error:'Feedback não encontrado.'});res.json({ok:true});
+ }));
  router.use((err,_req,res,_next)=>{res.status(err.message.startsWith('Save')?400:500).json({error:err.message.startsWith('Save')?err.message:'Não foi possível concluir. Tente novamente.'});});
 }
 module.exports={installAccounts,snapshot,hash,verify};
