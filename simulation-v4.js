@@ -9,10 +9,27 @@ const PLAYER_SHOT_SPEED = 760;
 const PLAYER_DAMAGE = 34;
 const PLAYER_RADIUS = 28;
 const ENEMY_RADIUS = 34;
+const ENEMY_SINK_DURATION = 1.65;
+const BOSS_SINK_DURATION = 2.85;
 
 function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
 function norm(x,y){ const l=Math.hypot(x,y)||1; return {x:x/l,y:y/l}; }
 function dist2(a,b){ const dx=a.x-b.x,dy=a.y-b.y; return dx*dx+dy*dy; }
+function insideEllipse(px,py,cx,cy,rx,ry){
+  const dx=(px-cx)/Math.max(1,rx),dy=(py-cy)/Math.max(1,ry);
+  return dx*dx+dy*dy<=1;
+}
+function projectileHitsEnemy(s,e){
+  const sr=Number(s.radius)||8;
+  if(!e.isBoss){
+    const rr=(Number(e.r)||ENEMY_RADIUS)+sr;
+    return dist2(s,e)<=rr*rr;
+  }
+  // Bosses usam o casco/corpo como alvo. O topo da vela não decide mais colisão.
+  const hull=insideEllipse(s.x,s.y,e.x,e.y+66,112+sr,53+sr);
+  const body=insideEllipse(s.x,s.y,e.x,e.y+18,78+sr,102+sr);
+  return hull||body;
+}
 function id(prefix, state){ state.netId=(state.netId||1)+1; return prefix + state.netId; }
 
 function spawnPoint(slot,count){
@@ -106,27 +123,43 @@ class AuthoritativeSimulation {
   }
   startBoss(){
     const max=Math.round(1500*(1+(this.wave-15)*.04));
-    const e={__netId:id('boss_',this),x:W*.5,y:-145,prevX:W*.5,prevY:-145,vx:0,vy:38,r:92,hp:max,max,type:'boss',role:'flagship',variant:'boss',isBoss:true,bossKind:'marine',phase:0,sinking:0,cannonAngle:Math.PI/2,shot:1.25,destroyed:false};
-    this.enemies=[e];this.enemyShots=[];this.bossFight={kind:'marine',defeated:false,intro:2.8,introMax:2.8,cfg:{name:'ALMIRANTE DA MARINHA',hp:max}};
+    const introMax=3.35,startY=-215,targetY=165;
+    const e={__netId:id('boss_',this),x:W*.5,y:startY,prevX:W*.5,prevY:startY,vx:0,vy:0,r:92,hp:max,max,type:'boss',role:'flagship',variant:'boss',isBoss:true,bossKind:'marine',phase:0,sinking:0,cannonAngle:Math.PI/2,shot:1.25,destroyed:false,
+      bossHullY:66,bossHullRx:112,bossHullRy:53,bossBodyY:18,bossBodyRx:78,bossBodyRy:102};
+    this.enemies=[e];this.enemyShots=[];
+    this.bossFight={kind:'marine',defeated:false,intro:introMax,introMax,entryProgress:0,entryStartY:startY,entryTargetY:targetY,cfg:{name:'ALMIRANTE DA MARINHA',hp:max}};
   }
   targetFor(enemy){
     let best=null,bd=Infinity;for(const p of this.players){if(!p.connected||!p.alive)continue;const d=dist2(enemy,p.entity);if(d<bd){bd=d;best=p;}}return best;
   }
   updateEnemies(dt){
     for(const e of this.enemies){
-      e.prevX=e.x;e.prevY=e.y;if(e.destroyed)continue;
+      e.prevX=e.x;e.prevY=e.y;
+      if(e.destroyed||e.sinking>0){
+        e.sinking=Math.max(.01,Number(e.sinking)||.01)+dt;
+        e.vx=(Number(e.vx)||0)*Math.pow(.035,dt);
+        e.vy=(Number(e.vy)||0)*Math.pow(.035,dt);
+        continue;
+      }
       const target=this.targetFor(e);if(!target)continue;
       if(e.isBoss&&this.bossFight?.intro>0){
         this.bossFight.intro=Math.max(0,this.bossFight.intro-dt);
-        e.y=Math.min(155,e.y+48*dt); e.vy=48;continue;
+        const max=Math.max(.01,this.bossFight.introMax||3.35);
+        const p=clamp(1-this.bossFight.intro/max,0,1),ease=1-Math.pow(1-p,3);
+        const startY=Number(this.bossFight.entryStartY??-215),targetY=Number(this.bossFight.entryTargetY??165);
+        const oldY=e.y;e.y=startY+(targetY-startY)*ease;e.vy=(e.y-oldY)/Math.max(dt,.001);
+        this.bossFight.entryProgress=p;
+        continue;
       }
       const te=target.entity,a=Math.atan2(te.y-e.y,te.x-e.x);e.cannonAngle=a;e.shot-=dt;
       const sp=e.isBoss?54:(e.type==='heavy'?45:62)+Math.min(22,this.wave*.8);
       e.vx+=(Math.cos(a)*sp-e.vx)*Math.min(1,dt*1.35);e.vy+=(Math.sin(a)*sp-e.vy)*Math.min(1,dt*1.35);
       e.x+=e.vx*dt;e.y+=e.vy*dt;
-      const d=Math.hypot(te.x-e.x,te.y-e.y);
+      const tx=e.isBoss?e.x: e.x,ty=e.isBoss?e.y+62:e.y;
+      const d=Math.hypot(te.x-tx,te.y-ty);
       if(e.shot<=0&&d<760){this.fireEnemy(e,target);e.shot=e.isBoss?.72+this.rng()*.35:Math.max(1.25,2.65-this.wave*.025)+this.rng()*.55;}
-      if(d<(e.r||34)+PLAYER_RADIUS*.72)this.damagePlayer(target,e.isBoss?20:11);
+      const contactR=e.isBoss?82:(e.r||34)+PLAYER_RADIUS*.72;
+      if(d<contactR)this.damagePlayer(target,e.isBoss?20:11);
     }
   }
   fireEnemy(e,target){
@@ -145,7 +178,7 @@ class AuthoritativeSimulation {
       if(s.life<=0)continue;
       for(const e of this.enemies){
         if(e.destroyed||e.hp<=0)continue;
-        const rr=(e.r||ENEMY_RADIUS)+(s.radius||8);if(dist2(s,e)>rr*rr)continue;
+        if(!projectileHitsEnemy(s,e))continue;
         e.hp-=s.damage;s.life=0;const owner=this.players[s.ownerId];if(owner)owner.stats.damageDealt+=s.damage;
         if(e.hp<=0)this.destroyEnemy(e,owner);break;
       }
@@ -159,29 +192,32 @@ class AuthoritativeSimulation {
       }
     }
     this.shots=this.shots.filter(s=>s.life>0);this.enemyShots=this.enemyShots.filter(s=>s.life>0);
-    this.enemies=this.enemies.filter(e=>!e.destroyed);
+    this.enemies=this.enemies.filter(e=>!e.destroyed||e.sinking<(e.isBoss?BOSS_SINK_DURATION:ENEMY_SINK_DURATION));
   }
   damagePlayer(p,amount){
     const e=p.entity;if(!p.alive||e.inv>0)return;e.hp=Math.max(0,e.hp-amount);e.inv=.42;p.stats.damageTaken+=amount;
     if(e.hp<=0){p.alive=false;p.stats.deaths++;e.vx=e.vy=0;if(!this.players.some(q=>q.connected&&q.alive))this.state='gameover';}
   }
   destroyEnemy(e,owner){
-    e.destroyed=true;this.score+=e.isBoss?1200:100;if(owner){owner.stats.kills++;owner.gold+=e.isBoss?220:35;owner.stats.goldCollected+=e.isBoss?220:35;}
-    if(e.isBoss&&this.bossFight){this.bossFight.defeated=true;this.bossFight.intro=0;this.bossClearTimer=2.2;}
+    if(e.destroyed)return;
+    e.destroyed=true;e.sinking=.01;e.vx*=.2;e.vy*=.2;
+    this.score+=e.isBoss?1200:100;if(owner){owner.stats.kills++;owner.gold+=e.isBoss?220:35;owner.stats.goldCollected+=e.isBoss?220:35;}
+    if(e.isBoss&&this.bossFight){this.bossFight.defeated=true;this.bossFight.intro=0;this.bossClearTimer=BOSS_SINK_DURATION+.25;}
   }
   updateWaves(dt){
     if(this.state!=='play')return;
+    const living=this.enemies.filter(e=>!e.destroyed&&e.hp>0);
     if(this.bossFight){
       if(this.bossFight.defeated){
         this.bossClearTimer-=dt;
         if(this.bossClearTimer<=0){this.bossClearTimer=-1;this.bossFight=null;this.nextWave();}
         return;
       }
-      if(!this.enemies.length){this.bossFight=null;this.nextWave();}return;
+      if(!living.length){this.bossFight=null;this.nextWave();}return;
     }
     if(this.waveRemainingToSpawn>0){
       this.waveSpawnClock-=dt;if(this.waveSpawnClock<=0){this.spawnEnemy();this.waveRemainingToSpawn--;this.waveSpawnClock=Math.max(.32,.92-this.wave*.012);}
-    }else if(!this.enemies.length){
+    }else if(!living.length){
       if(this.waveCompleteTimer<0)this.waveCompleteTimer=1.5;
       else{this.waveCompleteTimer-=dt;if(this.waveCompleteTimer<=0)this.nextWave();}
     }
