@@ -109,9 +109,14 @@ class AuthoritativeSimulation {
     }
   }
   firePlayer(p){
-    const e=p.entity,a=p.aim,c=Math.cos(a),s=Math.sin(a);
-    const shot={__netId:id('ps_',this),team:'player',ownerId:p.id,x:e.x+c*36,y:e.y+s*36+28,prevX:e.x,prevY:e.y+28,vx:c*PLAYER_SHOT_SPEED,vy:s*PLAYER_SHOT_SPEED,life:1.8,damage:PLAYER_DAMAGE*(e.damageMult||1),radius:8,hitIds:[],cosmeticProjectile:this.cosmeticFor(p.skinId)};
-    this.shots.push(shot); e.shot=PLAYER_FIRE_CD/Math.max(.35,e.fireRateMult||1); this.metrics.shots++;
+    const e=p.entity,a=p.aim,cosmetic=this.cosmeticFor(p.skinId),count=e.doubleShot?2:1;
+    for(let i=0;i<count;i++){
+      const side=count===2?(i===0?-1:1):0,off=side*8,c=Math.cos(a),si=Math.sin(a),px=-si,py=c;
+      const x=e.x+c*36+px*off,y=e.y+si*36+28+py*off;
+      const shot={__netId:id('ps_',this),team:'player',ownerId:p.id,x,y,prevX:x,prevY:y,vx:c*PLAYER_SHOT_SPEED,vy:si*PLAYER_SHOT_SPEED,life:1.8,damage:PLAYER_DAMAGE*(e.damageMult||1),radius:8,hitIds:[],cosmeticProjectile:cosmetic,flame:!!e.flame,explosive:!!e.explosive,piercing:!!e.piercing};
+      this.shots.push(shot);this.metrics.shots++;
+    }
+    e.shot=PLAYER_FIRE_CD/Math.max(.35,e.fireRateMult||1);
   }
   cosmeticFor(skin){return skin==='gullit'?'gullit':skin==='midas'?'gold':skin==='rei-dos-mares'?'king':null;}
 
@@ -198,7 +203,7 @@ class AuthoritativeSimulation {
     this.enemies=this.enemies.filter(e=>!e.destroyed||e.sinking<(e.isBoss?BOSS_SINK_DURATION:ENEMY_SINK_DURATION));
   }
   damagePlayer(p,amount){
-    const e=p.entity;if(!p.alive||e.inv>0)return;e.hp=Math.max(0,e.hp-amount);e.inv=.42;p.stats.damageTaken+=amount;
+    const e=p.entity;if(!p.alive||e.inv>0)return;const dealt=Math.max(0,amount*(Number(e.incomingDamageMult)||1));e.hp=Math.max(0,e.hp-dealt);e.inv=.42;p.stats.damageTaken+=dealt;
     if(e.hp<=0){p.alive=false;p.stats.deaths++;e.vx=e.vy=0;if(!this.players.some(q=>q.connected&&q.alive))this.state='gameover';}
   }
   destroyEnemy(e,owner){
