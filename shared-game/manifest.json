@@ -1,8 +1,8 @@
 {
   "repository": "pandapidio/pandapidio-games",
-  "frontendCommit": "55502fa8f1f31739c77b5ee308b6eeeaa56557cf",
+  "frontendCommit": "a10b20d4a9366cf9918cc154873913bea9c2eb9e",
   "files": {
-    "index.html": "f00652042c568d9d07822af38207b75569fa97edf4914c76f87cea5656d6fac8",
+    "index.html": "e382c071f8d2ad4be1cfcb269acfd42806a2d463eb9046d55e81e59039ca8b46",
     "version.js": "a18b3e1b07188a8c7fdcfe2080c1aa8aa2575141892345c8c3d2c80a208af448",
     "polish.js": "671f4c29347281b2595cae9b88c646eba58e743b50656ef8243c165912279704",
     "seascape.js": "80233468fdb041da6cb63617f69aa50524e2864e02bd47ffdddf9883df1a412f",
