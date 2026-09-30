@@ -39,6 +39,21 @@ test('accounts: import only on creation, replacement saves, retries, isolation a
   assert.equal((await request('/admin/feedback?trash=1','GET',null,token)).data.total,1);
   assert.equal((await request('/admin/feedback/'+feedback.id+'/restore','POST',null,token)).status,200);
   assert.equal((await request('/admin/feedback','GET',null,token)).data.total,1);
+  assert.equal((await request('/admin/users','GET',null,other.data.token)).status,403);
+  const users=await request('/admin/users','GET',null,token);assert.equal(users.data.total,2);assert.equal(users.data.items[0].username,'Pandateste');assert.equal(users.data.items[0].password_hash,undefined);assert.equal(users.data.items[0].progress,undefined);
+  assert.equal((await request('/admin/users/'+a.data.user.id,'PATCH',{action:'ban'},token)).status,409);
+  assert.equal((await request('/admin/users/'+other.data.user.id,'PATCH',{action:'grant-admin'},other.data.token)).status,403);
+  assert.equal((await request('/admin/users/'+other.data.user.id,'PATCH',{action:'grant-admin'},token)).data.user.isAdmin,true);
+  assert.equal((await request('/admin/users','GET',null,other.data.token)).status,200);
+  assert.equal((await request('/admin/users/'+other.data.user.id,'PATCH',{action:'ban'},token)).status,409);
+  assert.equal((await request('/admin/users/'+other.data.user.id,'PATCH',{action:'revoke-admin'},token)).data.user.isAdmin,false);
+  assert.equal((await request('/admin/users','GET',null,other.data.token)).status,403);
+  assert.equal((await request('/admin/users/'+other.data.user.id,'PATCH',{action:'ban'},token)).status,200);
+  assert.equal((await request('/me','GET',null,other.data.token)).status,401);
+  assert.equal((await request('/session','POST',{username:'OutroPanda',password:'other-pass-123'})).status,403);
+  assert.equal((await request('/admin/users/'+other.data.user.id,'PATCH',{action:'grant-admin'},token)).status,409);
+  assert.equal((await request('/admin/users/'+other.data.user.id,'PATCH',{action:'unban'},token)).data.user.bannedAt,null);
+  const unbanned=await request('/session','POST',{username:'OutroPanda',password:'other-pass-123'});assert.equal(unbanned.status,200);assert.equal(unbanned.data.progress.reiDosMaresDiamonds,'7');
   await db.query('UPDATE pg_accounts SET is_admin=false WHERE id=$1',[a.data.user.id]);
   assert.equal((await request('/admin/feedback','GET',null,token)).status,403); // revocation takes effect in the same session
   await request('/session','DELETE',null,token);assert.equal((await request('/me','GET',null,token)).status,401);

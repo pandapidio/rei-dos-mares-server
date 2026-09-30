@@ -43,6 +43,8 @@ async function installAccounts(app,{db,origins,production=true}={}){
  CREATE TABLE IF NOT EXISTS pg_save_writes(account_id UUID NOT NULL REFERENCES pg_accounts(id) ON DELETE CASCADE, write_id UUID NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(account_id,write_id));
  CREATE TABLE IF NOT EXISTS pg_feedback(id UUID PRIMARY KEY, account_id UUID NOT NULL REFERENCES pg_accounts(id), subject TEXT NOT NULL, message TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
  ALTER TABLE pg_accounts ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false;
+ ALTER TABLE pg_accounts ADD COLUMN IF NOT EXISTS banned_at TIMESTAMPTZ;
+ CREATE INDEX IF NOT EXISTS pg_accounts_created ON pg_accounts(created_at,id);
  ALTER TABLE pg_feedback ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
  CREATE INDEX IF NOT EXISTS pg_feedback_inbox ON pg_feedback(deleted_at,created_at DESC,id);`;
  for(const statement of schema.split(';').filter(x=>x.trim()))await db.query(statement);
@@ -70,6 +72,7 @@ async function installAccounts(app,{db,origins,production=true}={}){
    if(!a)a=(await db.query('SELECT * FROM pg_accounts WHERE username_key=$1',[key])).rows[0];
   }
   if(!created&&!await verify(password,a.password_hash))return res.status(401).json({error:'Senha incorreta.'});
+  if(a.banned_at)return res.status(403).json({error:'Esta conta está banida do site.'});
   const token=crypto.randomBytes(32).toString('base64url');
   await db.query('DELETE FROM pg_sessions WHERE expires_at<now()');
   await db.query("INSERT INTO pg_sessions VALUES($1,$2,now()+interval '30 days')",[digest(token),a.id]);
@@ -78,7 +81,8 @@ async function installAccounts(app,{db,origins,production=true}={}){
  router.use(wrap(async(req,res,next)=>{
   const raw=req.get('authorization')||'',token=raw.startsWith('Bearer ')?raw.slice(7):'';
   const a=(await db.query('SELECT a.* FROM pg_accounts a JOIN pg_sessions s ON a.id=s.account_id WHERE s.token_hash=$1 AND s.expires_at>now()',[digest(token)])).rows[0];
-  if(!a)return res.status(401).json({error:'Entre novamente na sua conta.'});req.account=a;req.tokenHash=digest(token);next();
+  if(!a)return res.status(401).json({error:'Entre novamente na sua conta.'});
+  if(a.banned_at)return res.status(403).json({error:'Esta conta está banida do site.'});req.account=a;req.tokenHash=digest(token);next();
  }));
  router.get('/me',wrap(async(req,res)=>res.json({user:publicUser(req.account),progress:req.account.progress,revision:req.account.revision})));
  router.put('/progress',wrap(async(req,res)=>{
@@ -115,6 +119,37 @@ async function installAccounts(app,{db,origins,production=true}={}){
  // Roles come from the database on every authenticated request, never from the browser.
  router.use('/admin',(req,res,next)=>req.account.is_admin===true?next():res.status(403).json({error:'Esta página é exclusiva para administradores.'}));
  const uuid=id=>typeof id==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+ const adminUser=a=>({...publicUser(a),bannedAt:a.banned_at});
+ router.get('/admin/users',wrap(async(req,res)=>{
+  const offset=Number(req.query.offset||0);
+  if(!Number.isSafeInteger(offset)||offset<0||offset>1000000)return res.status(400).json({error:'Página inválida.'});
+  const total=Number((await db.query('SELECT count(*) FROM pg_accounts')).rows[0].count);
+  const items=(await db.query('SELECT id,username,avatar,created_at,is_admin,banned_at FROM pg_accounts ORDER BY created_at ASC,id ASC LIMIT 30 OFFSET $1',[offset])).rows.map(adminUser);
+  res.json({items,total,offset,limit:30});
+ }));
+ async function accountTransaction(fn){
+  // Serialize role changes, then recheck the acting admin inside the transaction.
+  if(typeof db.transaction==='function')return db.transaction(async tx=>{await tx.query('LOCK TABLE pg_accounts IN SHARE ROW EXCLUSIVE MODE');return fn(tx);});
+  const client=await db.connect();try{await client.query('BEGIN');await client.query('LOCK TABLE pg_accounts IN SHARE ROW EXCLUSIVE MODE');const result=await fn(client);await client.query('COMMIT');return result;}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+ }
+ router.patch('/admin/users/:id',wrap(async(req,res)=>{
+  const action=req.body.action;
+  if(!uuid(req.params.id)||!['ban','unban','grant-admin','revoke-admin'].includes(action))return res.status(400).json({error:'Ação de conta inválida.'});
+  if(req.params.id===req.account.id)return res.status(409).json({error:'Você não pode alterar suas próprias permissões ou banir sua conta.'});
+  const result=await accountTransaction(async tx=>{
+   const actor=(await tx.query('SELECT is_admin,banned_at FROM pg_accounts WHERE id=$1',[req.account.id])).rows[0];
+   if(!actor?.is_admin||actor.banned_at)return {status:403,error:'Sua conta não tem mais acesso de administrador.'};
+   const target=(await tx.query('SELECT id,is_admin,banned_at FROM pg_accounts WHERE id=$1',[req.params.id])).rows[0];
+   if(!target)return {status:404,error:'Conta não encontrada.'};
+   if(action==='ban'&&target.is_admin)return {status:409,error:'Retire o acesso de administrador antes de banir esta conta.'};
+   if(action==='grant-admin'&&target.banned_at)return {status:409,error:'Desbana a conta antes de conceder acesso de administrador.'};
+   const statements={ban:'banned_at=COALESCE(banned_at,now())',unban:'banned_at=NULL','grant-admin':'is_admin=true','revoke-admin':'is_admin=false'};
+   const a=(await tx.query(`UPDATE pg_accounts SET ${statements[action]} WHERE id=$1 RETURNING id,username,avatar,created_at,is_admin,banned_at`,[target.id])).rows[0];
+   if(action==='ban')await tx.query('DELETE FROM pg_sessions WHERE account_id=$1',[target.id]);
+   return {user:adminUser(a)};
+  });
+  if(result.error)return res.status(result.status).json({error:result.error});res.json(result);
+ }));
  router.get('/admin/feedback',wrap(async(req,res)=>{
   const offset=Number(req.query.offset||0),trash=req.query.trash==='1';
   if(!Number.isSafeInteger(offset)||offset<0||offset>1000000)return res.status(400).json({error:'Página inválida.'});
