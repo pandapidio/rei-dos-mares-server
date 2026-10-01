@@ -26,7 +26,7 @@ class FullSimulation{
   vm.runInContext(`ReiMultiplayerLocal.startOnline(__metas,{host:true,localSlot:-1,localInput:()=>window.__input0||{mx:0,my:0,ax:0,ay:-1,fire:false}});voyage.tutorial.active=false;audioState.unlocked=false;`,this.context);
   delete w.__metas;
   w.__recordSound=(name,volume,cooldown)=>{if(['thunder','barrage-launch','barrage-impact','ghost-impact','charge','heal','victory'].includes(name))this.sounds.push({id:++this.soundSeq,name,volume,cooldown,at:Date.now()});};
-  vm.runInContext('sfx=(name,volume=1,cooldown=0)=>window.__recordSound(name,volume,cooldown);',this.context);
+  vm.runInContext('sfx=(name,volume=1,cooldown=0)=>window.__recordSound(name,volume,cooldown);addParticle=()=>{};burst=()=>{};addLootText=()=>{};updateParticles=()=>{};updateBeamEffects=()=>{};particles=[];lootTexts=[];',this.context);
 
  }
  get state(){return vm.runInContext('state',this.context);}
@@ -58,7 +58,7 @@ class FullSimulation{
   this.metrics.ticks++;this.window.__dt=dt;const primary=this.players.find(p=>p.connected&&p.alive)||this.players.find(p=>p.connected);this.window.__input0=this.lastInputs.get(primary?.id)||{mx:0,my:0,ax:0,ay:-1,fire:false};vm.runInContext(`{keys.clear();const a=window.__input0||{};if(a.mx>.1)keys.add('d');if(a.mx<-.1)keys.add('a');if(a.my>.1)keys.add('s');if(a.my<-.1)keys.add('w');mouse.x=player.x+(a.ax||0)*1000;mouse.y=player.y+(a.ay??-1)*1000;mouse.down=!!a.fire;update(__dt);if(a.fire)shoot();}`,this.context);}
  snapshot(full=false){
   const mp=this.window.ReiMultiplayerLocal;
-  const snap=mp.makeSnapshot({lite:!full});
+  const snap=mp.makeSnapshot({lite:!full,richPlayers:true});
   const extra=vm.runInContext(`({infiniteMode,bossReward:bossReward?{...bossReward,dialogue:bossRewardText.textContent}:null,pendingBlackbeardLine,
     campaignPresentation:{damageFlash:campaign.damageFlash,damageDirection:campaign.damageDirection,events:campaign.events,mods:campaign.mods,fog:campaign.fog,bossMist:campaign.bossMist,giantVortex:campaign.giantVortex,bossDeath:campaign.bossDeath,interlude:campaign.interlude},
     voyagePresentation:{eventTime:voyage.eventTime,flash:voyage.flash,formation:voyage.formation,notice:voyage.notice,queue:voyage.queue}})`,this.context);
@@ -67,15 +67,7 @@ class FullSimulation{
   snap.shop=this.state==='upgrade'&&mp.shop?{...JSON.parse(JSON.stringify(snap.shop||mp.shop)),open:true,revision:this.shopRevision,wave:this.wave}:null;
   this.sounds=this.sounds.filter(e=>Date.now()-e.at<2000);snap.soundEvents=this.sounds;
   snap.authoritativeV4=true;snap.fullGameplay=true;snap.seq=++this.seq;snap.serverTime=Date.now();
-  const rich=snap.lite?mp.makeSnapshot({lite:false}).players:null;
-  for(const p of snap.players){
-    p.lastProcessedInput=this.lastInputSeq.get(p.id)||0;
-    if(snap.lite){
-      const live=this.players[p.id];
-      p.build=rich[p.id].build;
-      p.stats={...live.stats};
-    }
-  }
+  for(const p of snap.players)p.lastProcessedInput=this.lastInputSeq.get(p.id)||0;
   return snap;
  }
  performAction(slot,action,payload){
