@@ -110,3 +110,61 @@ try{
  assert.equal(r.window.ReiMultiplayerLocal.localInput().fire,false);
  console.log('Input expiry, reconnect, killer gold and boss identity regressions passed');
 }finally{r.dispose();}
+
+// Death snapshots and shop revives must never transfer a ship/build between slots.
+for(const deadSlot of [0,1,2]){
+ const sim=new FullSimulation(metas),replicas=[];
+ try{
+  advance(sim,5);
+  const mp=sim.window.ReiMultiplayerLocal;
+  const entities=sim.players.map(p=>p.entity),builds=sim.players.map(p=>p.build),upgrades=sim.players.map(p=>p.upgrades);
+  for(const [i,p]of sim.players.entries()){p.build.path=['marine','pirate','undead'][i];p.entity.speedMult=1+i*.1;p.upgrades.add(['gunnery','flame-shot','spectral-ammo'][i]);}
+  for(let slot=0;slot<3;slot++){
+   const client=new FullSimulation(metas);replicas.push(client);client.window.RDMOnline.serverSimulation=false;
+   client.window.ReiMultiplayerLocal.setOnlineRole(false,slot);
+   client.window.ReiMultiplayerLocal.applySnapshot(sim.snapshot(true),true);
+  }
+  mp.damagePlayer(deadSlot,10000);assert(!sim.players[deadSlot].alive);
+  const death=sim.snapshot();
+  for(const client of replicas)client.window.ReiMultiplayerLocal.applySnapshot(JSON.parse(JSON.stringify(death)),true);
+  for(let slot=0;slot<3;slot++){assert.equal(sim.players[slot].entity,entities[slot]);assert.equal(sim.players[slot].build,builds[slot]);assert.equal(sim.players[slot].upgrades,upgrades[slot]);}
+  sim.forceWaveComplete(10);sim.grantGold(5000);
+  const donor=(deadSlot+1)%3,second=(deadSlot+2)%3;
+  assert(sim.performAction(donor,'revive',{target:deadSlot,amount:500}).ok);
+  assert(!sim.players[deadSlot].alive);
+  assert(sim.performAction(second,'revive',{target:deadSlot,amount:'rest'}).ok);
+  assert(sim.players[deadSlot].alive);assert.equal(sim.players[deadSlot].entity.hp,70);
+  assert(!sim.performAction(donor,'revive',{target:deadSlot,amount:'rest'}).ok,'repeat revive does not charge');
+  const revived=sim.snapshot(true);
+  for(const client of replicas){client.window.ReiMultiplayerLocal.applySnapshot(JSON.parse(JSON.stringify(revived)),true);assert.equal(new Set(client.players.map(p=>p.entity)).size,3);}
+  assert.equal(new Set(sim.players.map(p=>p.entity)).size,3);
+  for(let slot=0;slot<3;slot++)assert(sim.performAction(slot,'ready',{ready:true}).ok);
+  assert.equal(sim.state,'play');
+  run(sim,'enemies=[];shots=[];enemyShots=[];waveRemainingToSpawn=999;');
+  const before=sim.players.map(p=>({x:p.entity.x,y:p.entity.y}));
+  for(let slot=0;slot<3;slot++)sim.setInput(slot,{mx:slot===deadSlot?1:slot===donor?-1:0,ax:0,ay:-1,fire:true},1);
+  advance(sim,.3);
+  assert(sim.players[deadSlot].entity.x>before[deadSlot].x+5);
+  assert(sim.players[donor].entity.x<before[donor].x-5);
+  assert.equal(sim.players[second].entity.x,before[second].x,'third captain is not moved by another controller');
+  assert.deepEqual([...new Set(sim.shots.map(q=>q.ownerId))].sort(),[0,1,2]);
+  for(let slot=0;slot<3;slot++){assert.equal(sim.players[slot].entity,entities[slot]);assert.equal(sim.players[slot].entity.speedMult,1+slot*.1);assert.equal(sim.players[slot].build,builds[slot]);}
+  const sailing=sim.snapshot();
+  for(const client of replicas){client.window.ReiMultiplayerLocal.applySnapshot(JSON.parse(JSON.stringify(sailing)),true);assert.equal(new Set(client.players.map(p=>p.entity)).size,3);}
+ }finally{sim.dispose();for(const c of replicas)c.dispose();}
+}
+const stress=new FullSimulation(metas);
+try{
+ stress.forceWave(101);run(stress,`{for(let i=0;i<100;i++)spawnEnemy();const p=ReiMultiplayerLocal.players[2];p.build.path='undead';p.build.pools=[{x:300,y:300,radius:76,damage:1,life:2,age:0,inside:new Set(enemies)}];}`);
+ const mp=stress.window.ReiMultiplayerLocal,original=mp.makeSnapshot;let calls=0;
+ mp.makeSnapshot=(...args)=>{calls++;return original(...args);};
+ const snap=stress.snapshot();assert.equal(calls,1,'one world serialization per snapshot');
+ assert(!JSON.stringify(snap).includes('"inside"'),'wire must not duplicate enemy objects in pool collision sets');
+ assert.equal(snap.enemies.length,stress.enemies.length);assert.equal(snap.players[2].build.pools.length,1);
+ assert(stress.players[2].build.pools[0].inside instanceof stress.window.Set,'wire optimization does not mutate combat sets');
+ stress.setConnected(2,false);stress.setConnected(2,true);
+ assert(stress.players[2].build.pools[0].inside instanceof stress.window.Set,'resume preserves live collision sets');
+ run(stress,'particles=[];lootTexts=[];for(let i=0;i<100;i++){addParticle(0,0,"white");addLootText(0,0,"test");}');
+ assert.equal(run(stress,'particles.length+lootTexts.length'),0,'headless server does not simulate cosmetic particles');
+ console.log('All captain revives, three replica clients, independent controls and high-wave serialization passed');
+}finally{stress.dispose();}

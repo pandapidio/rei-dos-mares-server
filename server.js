@@ -314,6 +314,11 @@ io.on('connection',socket=>{
   });
 
   if(process.env.RDM_TESTING==='1'){
+    socket.on('test:kill-player',(payload,cb=()=>{})=>{
+      const room=findRoom(socket),slot=Number(payload?.slot);if(!room?.sim||!room.sim.players[slot])return cb({ok:false});
+      room.sim.window.ReiMultiplayerLocal.damagePlayer(slot,100000);
+      const snapshot=roomSnapshot(room,true);io.to(room.code).emit('game:snapshot',snapshot);cb({ok:true,snapshot});
+    });
     socket.on('test:force-gameover',(_payload,cb=()=>{})=>{
       const room=findRoom(socket);if(!room?.started||!room.sim)return cb({ok:false});
       room.sim.forceGameover();room.paused=false;

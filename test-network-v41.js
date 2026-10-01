@@ -144,6 +144,24 @@ async function main(){
     const wave11=waitEvent(c3,'game:snapshot',x=>x?.state==='play'&&x?.wave===11,3500);
     for(const c of classClients)assert((await action(c,'ready',{ready:true})).ok);await wave11;
 
+    // Reproduce death -> immediate snapshot -> pooled revive -> leave shop on the wire.
+    const killed=await ack(c3,'test:kill-player',{slot:0});assert(killed.ok&&!killed.snapshot.players[0].alive);
+    assert.notDeepEqual(killed.snapshot.players[0].entity,killed.snapshot.players[1].entity,'death snapshot must not share ships');
+    assert((await ack(c3,'test:force-wave-complete',{wave:20})).ok);
+    assert((await ack(c3,'test:grant-gold',{gold:5000})).ok);
+    assert((await action(c2b,'revive',{target:0,amount:500})).ok);
+    const revival=await action(c3,'revive',{target:0,amount:'rest'},'revive-primary');assert(revival.ok);
+    const retry=await action(c3,'revive',{target:0,amount:'rest'},'revive-primary');assert(retry.ok);
+    assert.equal(retry.snapshot.players[2].gold,revival.snapshot.players[2].gold,'revive retry must not charge twice');
+    assert(revival.snapshot.players[0].alive);
+    assert.notDeepEqual(revival.snapshot.players[0].entity,revival.snapshot.players[1].entity);
+    for(const c of classClients)assert((await action(c,'ready',{ready:true})).ok);
+    const sailing=await waitEvent(c3,'game:snapshot',x=>x.state==='play'&&x.wave===21);
+    const captainX=sailing.players.map(p=>p.entity.x);
+    c1b.emit('game:input',{seq:2001,input:{mx:1,ax:0,ay:-1,fire:true}});
+    c2b.emit('game:input',{seq:2001,input:{mx:-1,ax:0,ay:-1,fire:true}});
+    const moved=await waitEvent(c3,'game:snapshot',x=>x.players[0].entity.x>captainX[0]+8&&x.players[1].entity.x<captainX[1]-8);
+    assert(moved.players[0].entity.x!==moved.players[1].entity.x,'revived captains move independently');
     const activeSockets=[c1b,c2b,c3];
     const ids=rrb.room.players.map(p=>p.playerId);
     const earlyLobby=await ack(c2b,'room:return-lobby',{});
