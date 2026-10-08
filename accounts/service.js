@@ -3,7 +3,7 @@ const express=require('express'), crypto=require('node:crypto'), path=require('n
 const {promisify}=require('node:util');
 const scrypt=promisify(crypto.scrypt);
 const AVATARS=['panda','jeff','liu','ayuwoke','blackbeard','ghost','marine'];
-const ownKey=k=>/^reiDosMares[A-Za-z0-9]+$/.test(k)||['ayuwoke_best','game_complete'].includes(k);
+const ownKey=k=>/^reiDosMares[A-Za-z0-9]+$/.test(k)||['ayuwoke_best','game_complete','predio_esquizito_save_v2'].includes(k);
 function snapshot(value){
  if(!value||Array.isArray(value)||typeof value!=='object')throw new Error('Save inválido.');
  const clean=Object.create(null);
